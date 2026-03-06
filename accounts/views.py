@@ -1,9 +1,10 @@
-from rest_framework import status
+from rest_framework import status, viewsets
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework_simplejwt.tokens import RefreshToken
 
+from .models import User
 from .serializers import RegisterSerializer, LoginSerializer, UserSerializer
 
 
@@ -66,16 +67,26 @@ class LogoutView(APIView):
         return Response({"message": "Logged out successfully."}, status=status.HTTP_200_OK)
 
 
-class MeView(APIView):
+class MeViewSet(viewsets.ModelViewSet):
+    serializer_class = UserSerializer
     permission_classes = [IsAuthenticated]
+    http_method_names = ["get", "patch", "head", "options"]
 
-    def get(self, request):
-        serializer = UserSerializer(request.user)
+    def get_queryset(self):
+        return User.objects.filter(pk=self.request.user.pk)
+
+    def get_object(self):
+        obj = self.request.user
+        self.check_object_permissions(self.request, obj)
+        return obj
+
+    def retrieve(self, request, *args, **kwargs):
+        serializer = self.get_serializer(self.get_object())
         return Response(serializer.data)
 
-    def patch(self, request):
-        serializer = UserSerializer(request.user, data=request.data, partial=True)
-        if serializer.is_valid():
-            serializer.save()
-            return Response(serializer.data)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    def partial_update(self, request, *args, **kwargs):
+        instance = self.get_object()
+        serializer = self.get_serializer(instance, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)
