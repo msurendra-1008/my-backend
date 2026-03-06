@@ -1,5 +1,7 @@
 from rest_framework import serializers
 from django.contrib.auth import authenticate
+
+from core.serializers import BaseModelSerializer
 from .models import User
 
 
@@ -35,10 +37,10 @@ class LoginSerializer(serializers.Serializer):
         return data
 
 
-class UserSerializer(serializers.ModelSerializer):
+class UserSerializer(BaseModelSerializer):
     full_name = serializers.ReadOnlyField()
 
     class Meta:
         model = User
-        fields = ["id", "email", "first_name", "last_name", "full_name", "created_at"]
+        fields = ["id", "email", "first_name", "last_name", "full_name", "created_at", "object_permissions"]
         read_only_fields = ["id", "created_at"]
