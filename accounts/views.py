@@ -1,9 +1,10 @@
-from rest_framework import status, viewsets
+from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework_simplejwt.tokens import RefreshToken
 
+from core.view_sets import BaseModelRefViewSet
 from .models import User
 from .serializers import RegisterSerializer, LoginSerializer, UserSerializer
 
@@ -67,9 +68,21 @@ class LogoutView(APIView):
         return Response({"message": "Logged out successfully."}, status=status.HTTP_200_OK)
 
 
-class MeViewSet(viewsets.ModelViewSet):
+class MeViewSet(BaseModelRefViewSet):
+    """
+    Provides GET /api/me/ and PATCH /api/me/ for the authenticated user.
+
+    Inherits from BaseModelRefViewSet which handles:
+    - JWT authentication + IsAuthenticated (via LoginRequiredMixin)
+    - 'accessed' signal on retrieve (via LogAccessMixin)
+    - Search / ordering / filter backends
+
+    lookup_field='ref' from the base class is irrelevant here because
+    get_object() bypasses URL-based lookup entirely — it always returns
+    the currently authenticated user.
+    """
+
     serializer_class = UserSerializer
-    permission_classes = [IsAuthenticated]
     http_method_names = ["get", "patch", "head", "options"]
 
     def get_queryset(self):
@@ -79,14 +92,3 @@ class MeViewSet(viewsets.ModelViewSet):
         obj = self.request.user
         self.check_object_permissions(self.request, obj)
         return obj
-
-    def retrieve(self, request, *args, **kwargs):
-        serializer = self.get_serializer(self.get_object())
-        return Response(serializer.data)
-
-    def partial_update(self, request, *args, **kwargs):
-        instance = self.get_object()
-        serializer = self.get_serializer(instance, data=request.data, partial=True)
-        serializer.is_valid(raise_exception=True)
-        serializer.save()
-        return Response(serializer.data)
