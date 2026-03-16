@@ -39,6 +39,7 @@ class LoginSerializer(serializers.Serializer):
 
 class UserSerializer(BaseModelSerializer):
     full_name = serializers.ReadOnlyField()
+    created_at = serializers.ReadOnlyField()
 
     class Meta:
         model = User

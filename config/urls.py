@@ -3,13 +3,20 @@ from django.urls import path, include
 from django.conf import settings
 from django.conf.urls.static import static
 from accounts.views import MeViewSet
+from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
 
 me_view = MeViewSet.as_view({"get": "retrieve", "patch": "partial_update"})
 
 urlpatterns = [
-    path("admin/", admin.site.urls),
-    path("api/auth/", include("accounts.urls")),
-    path("api/me/", me_view, name="me"),
+    path('admin/', admin.site.urls),
+    # Legacy
+    path('api/auth/', include('accounts.urls')),
+    path('api/me/', me_view, name='me'),
+    # v1
+    path('api/v1/', include('apps.authentication.urls')),
+    # Docs
+    path('api/schema/', SpectacularAPIView.as_view(), name='schema'),
+    path('api/docs/', SpectacularSwaggerView.as_view(url_name='schema'), name='swagger-ui'),
 ]
 
 if settings.DEBUG:
