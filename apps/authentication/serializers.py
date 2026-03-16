@@ -220,6 +220,8 @@ class UserSerializer(BaseModelSerializer):
     wallet_balance = serializers.SerializerMethodField()
     department     = serializers.SerializerMethodField()
     permissions    = serializers.SerializerMethodField()
+    upa_parent     = serializers.SerializerMethodField()
+    upa_legs       = serializers.SerializerMethodField()
 
     class Meta:
         model  = User
@@ -227,9 +229,35 @@ class UserSerializer(BaseModelSerializer):
             'id', 'email', 'mobile', 'first_name', 'last_name', 'full_name',
             'role', 'upa_id', 'photo_url', 'wallet_balance',
             'department', 'permissions', 'date_joined', 'is_active',
-            'object_permissions',
+            'object_permissions', 'upa_parent', 'upa_legs',
         ]
         read_only_fields = ['id', 'date_joined', 'upa_id', 'role']
+
+    @extend_schema_field(serializers.DictField(allow_null=True))
+    def get_upa_parent(self, obj):
+        try:
+            node = obj.upa_node
+            if not node.parent_user:
+                return None
+            p = node.parent_user
+            return {'name': p.full_name, 'upa_id': p.upa_id}
+        except Exception:
+            return None
+
+    @extend_schema_field(serializers.DictField())
+    def get_upa_legs(self, obj):
+        try:
+            children = {
+                c.leg: c
+                for c in UPATree.objects.filter(parent_user=obj).select_related('user')
+            }
+            result = {}
+            for leg in ('L', 'M', 'R'):
+                c = children.get(leg)
+                result[leg] = {'name': c.user.full_name, 'upa_id': c.user.upa_id} if c else None
+            return result
+        except Exception:
+            return {'L': None, 'M': None, 'R': None}
 
     @extend_schema_field(serializers.URLField(allow_null=True))
     def get_photo_url(self, obj):
