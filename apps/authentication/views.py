@@ -1,11 +1,11 @@
-from rest_framework import status, viewsets
+from rest_framework import status, serializers as s, viewsets
 from rest_framework.decorators import action
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework_simplejwt.tokens import RefreshToken
-from drf_spectacular.utils import extend_schema, extend_schema_view
+from drf_spectacular.utils import extend_schema, extend_schema_view, inline_serializer
 
 from core.mixins import LoginRequiredMixin
 from accounts.models import User
@@ -22,17 +22,21 @@ def _tokens(user):
     return {'access': str(refresh.access_token), 'refresh': str(refresh)}
 
 
-@extend_schema_view(
-    admin_login=extend_schema(tags=['Authentication']),
-    upa_register=extend_schema(tags=['Authentication']),
-    upa_login=extend_schema(tags=['Authentication']),
-    logout=extend_schema(tags=['Authentication']),
-    me=extend_schema(tags=['Authentication']),
-    upload_photo=extend_schema(tags=['Authentication']),
-)
+_auth_user_response = inline_serializer('AuthUserWithTokens', fields={
+    'access':  s.CharField(),
+    'refresh': s.CharField(),
+    'user':    UserSerializer(),
+})
+
+
 class AuthViewSet(viewsets.ViewSet):
     authentication_classes = [JWTAuthentication]
 
+    @extend_schema(
+        tags=['Authentication'],
+        request=AdminLoginSerializer,
+        responses={200: _auth_user_response},
+    )
     @action(detail=False, methods=['post'], url_path='admin/login', permission_classes=[AllowAny])
     def admin_login(self, request):
         serializer = AdminLoginSerializer(data=request.data)
@@ -43,6 +47,23 @@ class AuthViewSet(viewsets.ViewSet):
             'user': UserSerializer(user, context={'request': request}).data,
         })
 
+    @extend_schema(
+        tags=['Authentication'],
+        request=UPARegisterSerializer,
+        responses={
+            201: inline_serializer('UPARegisterSuccess', fields={
+                'success':  s.BooleanField(),
+                'access':   s.CharField(),
+                'refresh':  s.CharField(),
+                'user':     UserSerializer(),
+            }),
+            200: inline_serializer('UPARegisterNoLeg', fields={
+                'success':            s.BooleanField(),
+                'suggest_standalone': s.BooleanField(),
+                'message':            s.CharField(),
+            }),
+        },
+    )
     @action(detail=False, methods=['post'], url_path='user/register', permission_classes=[AllowAny])
     def upa_register(self, request):
         serializer = UPARegisterSerializer(data=request.data)
@@ -65,6 +86,11 @@ class AuthViewSet(viewsets.ViewSet):
             'user': UserSerializer(user, context={'request': request}).data,
         }, status=status.HTTP_201_CREATED)
 
+    @extend_schema(
+        tags=['Authentication'],
+        request=UPALoginSerializer,
+        responses={200: _auth_user_response},
+    )
     @action(detail=False, methods=['post'], url_path='user/login', permission_classes=[AllowAny])
     def upa_login(self, request):
         serializer = UPALoginSerializer(data=request.data)
@@ -72,6 +98,11 @@ class AuthViewSet(viewsets.ViewSet):
         user = serializer.validated_data['user']
         return Response({**_tokens(user), 'user': UserSerializer(user, context={'request': request}).data})
 
+    @extend_schema(
+        tags=['Authentication'],
+        request=inline_serializer('LogoutRequest', fields={'refresh': s.CharField()}),
+        responses={205: None},
+    )
     @action(detail=False, methods=['post'], url_path='logout', permission_classes=[IsAuthenticated])
     def logout(self, request):
         try:
@@ -80,6 +111,9 @@ class AuthViewSet(viewsets.ViewSet):
             pass
         return Response(status=status.HTTP_205_RESET_CONTENT)
 
+    @extend_schema(methods=['GET'], tags=['Authentication'], responses={200: UserSerializer})
+    @extend_schema(methods=['PATCH'], tags=['Authentication'],
+                   request=EmployeeUpdateSerializer, responses={200: UserSerializer})
     @action(detail=False, methods=['get', 'patch'], url_path='me', permission_classes=[IsAuthenticated])
     def me(self, request):
         if request.method == 'GET':
@@ -90,6 +124,11 @@ class AuthViewSet(viewsets.ViewSet):
         serializer.save()
         return Response(UserSerializer(request.user, context={'request': request}).data)
 
+    @extend_schema(
+        tags=['Authentication'],
+        request=inline_serializer('PhotoUpload', fields={'photo': s.ImageField()}),
+        responses={200: inline_serializer('PhotoResponse', fields={'photo_url': s.URLField()})},
+    )
     @action(detail=False, methods=['patch'], url_path='me/photo',
             permission_classes=[IsAuthenticated], parser_classes=[MultiPartParser, FormParser])
     def upload_photo(self, request):
