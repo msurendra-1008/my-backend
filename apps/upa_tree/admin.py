@@ -36,7 +36,7 @@ class UPATreeAdmin(admin.ModelAdmin):
     upa_id_col.short_description = 'UPA ID'
 
     def full_name_col(self, obj):
-        return obj.user.get_full_name() or '—'
+        return obj.user.full_name or '—'
     full_name_col.short_description = 'Name'
 
     def mobile_col(self, obj):
@@ -48,7 +48,7 @@ class UPATreeAdmin(admin.ModelAdmin):
             return mark_safe('<span style="color:#999;font-style:italic">Root / Standalone</span>')
         p = obj.parent_user
         return mark_safe(
-            f'{p.get_full_name() or p.mobile}'
+            f'{p.full_name or p.mobile}'
             f'<br><span style="font-family:monospace;font-size:11px;color:#7c3aed">{p.upa_id or "—"}</span>'
         )
     parent_col.short_description = 'Parent'
@@ -67,7 +67,7 @@ class UPATreeAdmin(admin.ModelAdmin):
         leg_text  = {'L': 'Left', 'M': 'Middle', 'R': 'Right'}.get(obj.leg or '', obj.leg or '—')
 
         rows = (
-            ('Name',      p.get_full_name() or '—'),
+            ('Name',      p.full_name or '—'),
             ('UPA ID',    f'<span style="font-family:monospace;color:#7c3aed">{p.upa_id or "—"}</span>'),
             ('Mobile',    p.mobile or '—'),
             ('Placed in', f'<span style="background:{leg_color};padding:2px 10px;border-radius:12px;font-weight:600">{leg_text}</span>'),
@@ -104,7 +104,7 @@ class UPATreeAdmin(admin.ModelAdmin):
         for leg_key, leg_label, bg, fg in leg_configs:
             child = children.get(leg_key)
             if child:
-                name   = child.user.get_full_name() or '—'
+                name   = child.user.full_name or '—'
                 upa_id = child.user.upa_id or '—'
                 mobile = child.user.mobile or '—'
                 card = (
