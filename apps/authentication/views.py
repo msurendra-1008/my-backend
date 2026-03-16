@@ -13,7 +13,7 @@ from .permissions import IsAdmin
 from .serializers import (
     AdminLoginSerializer, UPARegisterSerializer, UPALoginSerializer,
     EmployeeRegisterSerializer, EmployeeUpdateSerializer,
-    EmployeeListSerializer, UserSerializer,
+    EmployeeListSerializer, UserSerializer, UPAUserListSerializer,
 )
 
 
@@ -170,3 +170,41 @@ class EmployeeViewSet(LoginRequiredMixin, viewsets.ModelViewSet):
         serializer.is_valid(raise_exception=True)
         user = serializer.save()
         return Response(EmployeeListSerializer(user, context={'request': request}).data, status=status.HTTP_201_CREATED)
+
+
+@extend_schema_view(
+    list=extend_schema(tags=['UPA Users'], summary='List all UPA users'),
+    retrieve=extend_schema(tags=['UPA Users'], summary='Retrieve a UPA user'),
+)
+class UPAUserViewSet(LoginRequiredMixin, viewsets.ReadOnlyModelViewSet):
+    """Read-only list/retrieve of UPA users. Admin & superadmin only."""
+    permission_classes = [IsAdmin]
+    serializer_class   = UPAUserListSerializer
+
+    def get_queryset(self):
+        return (
+            User.objects
+            .filter(role='upa_user')
+            .select_related('upa_node__parent_user', 'wallet')
+            .order_by('-date_joined')
+        )
+
+    @extend_schema(
+        tags=['UPA Users'],
+        summary='UPA user stats (total count)',
+        responses={200: inline_serializer('UPAStats', fields={
+            'total':      s.IntegerField(),
+            'standalone': s.IntegerField(),
+            'networked':  s.IntegerField(),
+        })},
+    )
+    @action(detail=False, methods=['get'], url_path='stats')
+    def stats(self, request):
+        from apps.upa_tree.models import UPATree
+        total      = User.objects.filter(role='upa_user').count()
+        standalone = UPATree.objects.filter(parent_user=None).count()
+        return Response({
+            'total':      total,
+            'standalone': standalone,
+            'networked':  total - standalone,
+        })

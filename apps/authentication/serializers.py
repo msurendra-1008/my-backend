@@ -176,6 +176,43 @@ class UPALoginSerializer(serializers.Serializer):
         return data
 
 
+class UPAUserListSerializer(serializers.ModelSerializer):
+    full_name    = serializers.CharField(read_only=True)
+    wallet_balance = serializers.SerializerMethodField()
+    parent_upa_id  = serializers.SerializerMethodField()
+    leg            = serializers.SerializerMethodField()
+    depth_level    = serializers.SerializerMethodField()
+    joined_at      = serializers.SerializerMethodField()
+
+    class Meta:
+        model  = User
+        fields = [
+            'id', 'full_name', 'mobile', 'upa_id', 'wallet_balance',
+            'parent_upa_id', 'leg', 'depth_level', 'joined_at',
+            'is_active', 'date_joined',
+        ]
+
+    def get_wallet_balance(self, obj):
+        try:    return str(obj.wallet.balance)
+        except: return '0.00'
+
+    def get_parent_upa_id(self, obj):
+        try:    return obj.upa_node.parent_user.upa_id if obj.upa_node.parent_user else None
+        except: return None
+
+    def get_leg(self, obj):
+        try:    return obj.upa_node.leg
+        except: return None
+
+    def get_depth_level(self, obj):
+        try:    return obj.upa_node.depth_level
+        except: return None
+
+    def get_joined_at(self, obj):
+        try:    return obj.upa_node.joined_at.isoformat()
+        except: return None
+
+
 @extend_schema_serializer(component_name='AuthUser')
 class UserSerializer(BaseModelSerializer):
     full_name      = serializers.CharField(read_only=True)
