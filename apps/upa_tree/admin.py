@@ -3,31 +3,6 @@ from django.utils.html import mark_safe
 from .models import UPATree
 
 
-class ChildNodeInline(admin.TabularInline):
-    """Shows all users who directly joined under this person (children)."""
-    model        = UPATree
-    fk_name      = 'parent_user'
-    extra        = 0
-    can_delete   = False
-    show_change_link = True
-    verbose_name        = 'Direct Referral (Child)'
-    verbose_name_plural = 'Direct Referrals (Children)'
-
-    readonly_fields = ('child_user_display', 'leg', 'depth_level', 'joined_at')
-    fields          = ('child_user_display', 'leg', 'depth_level', 'joined_at')
-
-    def child_user_display(self, obj):
-        full_name = obj.user.get_full_name() or '—'
-        upa_id    = obj.user.upa_id or '—'
-        mobile    = obj.user.mobile or '—'
-        return mark_safe(
-            f'<strong>{full_name}</strong>'
-            f'<br><span style="font-family:monospace;color:#7c3aed">{upa_id}</span>'
-            f'<br><span style="color:#888;font-size:11px">{mobile}</span>'
-        )
-    child_user_display.short_description = 'User'
-
-
 @admin.register(UPATree)
 class UPATreeAdmin(admin.ModelAdmin):
     list_display    = ('upa_id_col', 'full_name_col', 'mobile_col', 'parent_col', 'leg', 'depth_level', 'joined_at')
@@ -37,7 +12,6 @@ class UPATreeAdmin(admin.ModelAdmin):
         'user__mobile', 'parent_user__upa_id', 'parent_user__first_name',
     )
     ordering        = ('depth_level', 'joined_at')
-    inlines         = [ChildNodeInline]
     readonly_fields = ('user', 'parent_user', 'leg', 'depth_level', 'joined_at', 'parent_panel', 'leg_status_panel')
 
     fieldsets = (
