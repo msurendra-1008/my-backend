@@ -1,8 +1,9 @@
-from rest_framework import status
+from rest_framework import status, serializers as s
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework_simplejwt.tokens import RefreshToken
+from drf_spectacular.utils import extend_schema, inline_serializer
 
 from core.view_sets import BaseModelRefViewSet
 from .models import User
@@ -17,9 +18,24 @@ def get_tokens_for_user(user):
     }
 
 
+_token_pair = inline_serializer('TokenPair', fields={
+    'access':  s.CharField(),
+    'refresh': s.CharField(),
+})
+
+
 class RegisterView(APIView):
     permission_classes = [AllowAny]
 
+    @extend_schema(
+        tags=['accounts'],
+        request=RegisterSerializer,
+        responses={201: inline_serializer('RegisterResponse', fields={
+            'message': s.CharField(),
+            'user':    UserSerializer(),
+            'tokens':  _token_pair,
+        })},
+    )
     def post(self, request):
         serializer = RegisterSerializer(data=request.data)
         if serializer.is_valid():
@@ -39,6 +55,15 @@ class RegisterView(APIView):
 class LoginView(APIView):
     permission_classes = [AllowAny]
 
+    @extend_schema(
+        tags=['accounts'],
+        request=LoginSerializer,
+        responses={200: inline_serializer('LoginResponse', fields={
+            'message': s.CharField(),
+            'user':    UserSerializer(),
+            'tokens':  _token_pair,
+        })},
+    )
     def post(self, request):
         serializer = LoginSerializer(data=request.data)
         if serializer.is_valid():
@@ -58,6 +83,11 @@ class LoginView(APIView):
 class LogoutView(APIView):
     permission_classes = [IsAuthenticated]
 
+    @extend_schema(
+        tags=['accounts'],
+        request=inline_serializer('LogoutRequest', fields={'refresh': s.CharField()}),
+        responses={200: inline_serializer('LogoutResponse', fields={'message': s.CharField()})},
+    )
     def post(self, request):
         try:
             refresh_token = request.data["refresh"]

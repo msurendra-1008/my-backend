@@ -1,4 +1,5 @@
 from rest_framework import serializers
+from drf_spectacular.utils import extend_schema_field
 
 
 class BaseModelSerializer(serializers.ModelSerializer):
@@ -22,6 +23,7 @@ class BaseModelSerializer(serializers.ModelSerializer):
 
     object_permissions = serializers.SerializerMethodField(read_only=True)
 
+    @extend_schema_field(serializers.DictField())
     def get_object_permissions(self, obj):
         """
         Returns object-level permissions for the current user.

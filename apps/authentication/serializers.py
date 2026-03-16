@@ -1,4 +1,5 @@
 from rest_framework import serializers
+from drf_spectacular.utils import extend_schema_field, extend_schema_serializer
 from accounts.models import User
 from apps.users.models import EmployeeProfile
 from apps.wallet.models import Wallet
@@ -175,8 +176,9 @@ class UPALoginSerializer(serializers.Serializer):
         return data
 
 
+@extend_schema_serializer(component_name='AuthUser')
 class UserSerializer(BaseModelSerializer):
-    full_name      = serializers.ReadOnlyField()
+    full_name      = serializers.CharField(read_only=True)
     photo_url      = serializers.SerializerMethodField()
     wallet_balance = serializers.SerializerMethodField()
     department     = serializers.SerializerMethodField()
@@ -192,24 +194,28 @@ class UserSerializer(BaseModelSerializer):
         ]
         read_only_fields = ['id', 'date_joined', 'upa_id', 'role']
 
+    @extend_schema_field(serializers.URLField(allow_null=True))
     def get_photo_url(self, obj):
         request = self.context.get('request')
         if obj.photo and request:
             return request.build_absolute_uri(obj.photo.url)
         return None
 
+    @extend_schema_field(serializers.CharField(allow_null=True))
     def get_wallet_balance(self, obj):
         try:
             return str(obj.wallet.balance)
         except Exception:
             return None
 
+    @extend_schema_field(serializers.CharField(allow_null=True))
     def get_department(self, obj):
         try:
             return obj.employee_profile.department
         except Exception:
             return None
 
+    @extend_schema_field(serializers.ListField(child=serializers.CharField(), allow_null=True))
     def get_permissions(self, obj):
         try:
             return obj.employee_profile.permissions
@@ -218,7 +224,7 @@ class UserSerializer(BaseModelSerializer):
 
 
 class EmployeeListSerializer(BaseModelSerializer):
-    full_name   = serializers.ReadOnlyField()
+    full_name   = serializers.CharField(read_only=True)
     department  = serializers.SerializerMethodField()
     permissions = serializers.SerializerMethodField()
 
@@ -226,12 +232,14 @@ class EmployeeListSerializer(BaseModelSerializer):
         model  = User
         fields = ['id', 'email', 'mobile', 'full_name', 'role', 'department', 'permissions', 'is_active', 'date_joined', 'object_permissions']
 
+    @extend_schema_field(serializers.CharField(allow_null=True))
     def get_department(self, obj):
         try:
             return obj.employee_profile.department
         except Exception:
             return None
 
+    @extend_schema_field(serializers.ListField(child=serializers.CharField(), allow_null=True))
     def get_permissions(self, obj):
         try:
             return obj.employee_profile.permissions
