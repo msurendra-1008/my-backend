@@ -57,9 +57,10 @@ class UPANodeSerializer(serializers.ModelSerializer):
 class UPAProfileSerializer(UPANodeSerializer):
     wallet_balance   = serializers.SerializerMethodField()
     children_summary = serializers.SerializerMethodField()
+    user_id          = serializers.UUIDField(source='user.id')
 
     class Meta(UPANodeSerializer.Meta):
-        fields = UPANodeSerializer.Meta.fields + ['wallet_balance', 'children_summary']
+        fields = UPANodeSerializer.Meta.fields + ['user_id', 'wallet_balance', 'children_summary']
 
     def get_wallet_balance(self, obj):
         try:
