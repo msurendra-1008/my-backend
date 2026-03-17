@@ -7,12 +7,15 @@ from .utils import get_upa_price
 # ── Category ─────────────────────────────────────────────────────────────────
 
 class CategorySerializer(serializers.ModelSerializer):
-    parent_id   = serializers.UUIDField(source='parent.id',   read_only=True)
-    parent_name = serializers.CharField(source='parent.name', read_only=True)
+    parent_id   = serializers.UUIDField(source='parent.id',   read_only=True, allow_null=True)
+    parent_name = serializers.CharField(source='parent.name', read_only=True, allow_null=True)
+    parent      = serializers.PrimaryKeyRelatedField(
+        queryset=Category.objects.all(), allow_null=True, required=False, write_only=True,
+    )
 
     class Meta:
         model  = Category
-        fields = ['id', 'name', 'slug', 'parent_id', 'parent_name', 'is_active']
+        fields = ['id', 'name', 'slug', 'parent', 'parent_id', 'parent_name', 'is_active']
         read_only_fields = ['slug']
 
 
