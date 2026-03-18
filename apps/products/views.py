@@ -11,6 +11,7 @@ from rest_framework.response import Response
 from drf_spectacular.utils import extend_schema
 
 from core.mixins import LoginRequiredMixin
+from apps.authentication.mixins import PublicListAuthMixin
 from apps.authentication.permissions import IsAdmin, IsAdminOrEmployee, IsUPAUser, HasPermission
 from .models import Category, Product, ProductImage, ProductVariant, UPADiscountSettings
 from .serializers import (
@@ -29,7 +30,7 @@ class _ProductPagination(PageNumberPagination):
 
 # ── Category ──────────────────────────────────────────────────────────────────
 
-class CategoryViewSet(viewsets.ModelViewSet):
+class CategoryViewSet(PublicListAuthMixin, viewsets.ModelViewSet):
     serializer_class = CategorySerializer
     lookup_field     = 'slug'
 
@@ -45,24 +46,12 @@ class CategoryViewSet(viewsets.ModelViewSet):
             return [AllowAny()]
         return [IsAdminOrEmployee()]
 
-    def get_authentication_classes(self):
-        from rest_framework_simplejwt.authentication import JWTAuthentication
-        if self.action in ('list', 'retrieve'):
-            return []
-        return [JWTAuthentication()]
-
 
 # ── Product ───────────────────────────────────────────────────────────────────
 
-class ProductViewSet(viewsets.ModelViewSet):
-    lookup_field = 'slug'
+class ProductViewSet(PublicListAuthMixin, viewsets.ModelViewSet):
+    lookup_field   = 'slug'
     parser_classes = [MultiPartParser, FormParser, JSONParser]
-
-    def get_authentication_classes(self):
-        from rest_framework_simplejwt.authentication import JWTAuthentication
-        if self.action in ('list', 'retrieve'):
-            return []
-        return [JWTAuthentication()]
 
     def get_permissions(self):
         if self.action in ('list', 'retrieve'):
