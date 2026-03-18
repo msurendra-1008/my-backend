@@ -188,21 +188,37 @@ class CheckoutInitiateView(LoginRequiredMixin, APIView):
 
         subtotal, upa_discount, amount_payable, _ = _compute_cart_totals(cart)
 
-        # Wallet
-        wallet_amount = min(
-            data["wallet_amount"],
-            amount_payable,
-        )
+        # Wallet cap
+        wallet_amount = min(data["wallet_amount"], amount_payable)
         try:
             wallet = Wallet.objects.get(user=request.user)
             wallet_amount = min(wallet_amount, wallet.balance)
         except Wallet.DoesNotExist:
             wallet_amount = Decimal("0")
 
-        wallet_amount = wallet_amount.quantize(Decimal("0.01"), ROUND_HALF_UP)
+        wallet_amount   = wallet_amount.quantize(Decimal("0.01"), ROUND_HALF_UP)
         razorpay_amount = (amount_payable - wallet_amount).quantize(Decimal("0.01"), ROUND_HALF_UP)
 
+        # Create (or replace) a draft Order so confirm can fetch it by ID
+        draft_order = Order.objects.create(
+            user=request.user,
+            address_name=address.name,
+            address_phone=address.phone,
+            address_line=address.address_line,
+            address_city=address.city,
+            address_state=address.state,
+            address_pincode=address.pincode,
+            subtotal=subtotal,
+            upa_discount=upa_discount,
+            amount_payable=amount_payable,
+            wallet_used=wallet_amount,
+            razorpay_amount=razorpay_amount,
+            payment_status="pending",
+            order_status="pending",
+        )
+
         result = {
+            "internal_order_id": str(draft_order.id),
             "address": AddressSerializer(address).data,
             "subtotal":        str(subtotal),
             "upa_discount":    str(upa_discount),
@@ -212,11 +228,10 @@ class CheckoutInitiateView(LoginRequiredMixin, APIView):
         }
 
         if razorpay_amount > Decimal("0"):
-            # Amount in paise (×100)
             amount_paise = int((razorpay_amount * 100).quantize(Decimal("1")))
             rz = create_razorpay_order(amount_paise)
             result["razorpay_order_id"] = rz["razorpay_order_id"]
-            result["razorpay_key_id"]   = ""  # filled by settings if real
+            result["razorpay_key_id"]   = ""
             from django.conf import settings as djsettings
             if not djsettings.MOCK_PAYMENT_MODE:
                 result["razorpay_key_id"] = djsettings.RAZORPAY_KEY_ID
@@ -236,7 +251,15 @@ class CheckoutConfirmView(LoginRequiredMixin, APIView):
         ser.is_valid(raise_exception=True)
         data = ser.validated_data
 
-        address = get_object_or_404(Address, pk=data["address_id"], user=request.user)
+        # Fetch the draft order created by initiate — owned by this user
+        order = get_object_or_404(
+            Order,
+            pk=data["internal_order_id"],
+            user=request.user,
+            payment_status="pending",
+        )
+
+        print(f"[checkout_confirm] BEFORE update — order.id={order.id}  order.order_status={order.order_status!r}  order.payment_status={order.payment_status!r}")
 
         try:
             cart = Cart.objects.get(user=request.user)
@@ -246,7 +269,7 @@ class CheckoutConfirmView(LoginRequiredMixin, APIView):
         if not cart.items.exists():
             return Response({"detail": "Cart is empty."}, status=400)
 
-        # Re-compute totals
+        # Re-compute totals from the current cart
         subtotal, upa_discount, amount_payable, items_data = _compute_cart_totals(cart)
 
         # Wallet cap
@@ -265,7 +288,7 @@ class CheckoutConfirmView(LoginRequiredMixin, APIView):
         wallet_amount   = wallet_amount.quantize(Decimal("0.01"), ROUND_HALF_UP)
         razorpay_amount = (amount_payable - wallet_amount).quantize(Decimal("0.01"), ROUND_HALF_UP)
 
-        # Signature verification (skipped in mock mode when no real payment)
+        # Signature verification (skipped in mock mode or wallet-only payments)
         if razorpay_amount > Decimal("0"):
             if not verify_razorpay_signature(
                 data["razorpay_order_id"],
@@ -274,9 +297,8 @@ class CheckoutConfirmView(LoginRequiredMixin, APIView):
             ):
                 return Response({"detail": "Payment verification failed."}, status=400)
 
-        # Validate stock one more time (atomically)
         with transaction.atomic():
-            # Re-lock variants
+            # Re-lock variants for stock check
             for idata in items_data:
                 variant = ProductVariant.objects.select_for_update().get(pk=idata["variant"].pk)
                 if variant.stock_quantity < idata["quantity"]:
@@ -284,6 +306,27 @@ class CheckoutConfirmView(LoginRequiredMixin, APIView):
                         {"detail": f"'{variant.name}' went out of stock."},
                         status=400,
                     )
+
+            # ── Update the existing draft order (payment confirmed) ──────────
+            order.payment_status        = "paid"
+            order.order_status          = "confirmed"
+            order.razorpay_payment_id   = data["razorpay_payment_id"]
+            order.razorpay_order_id     = data["razorpay_order_id"]
+            order.razorpay_signature    = data["razorpay_signature"]
+            # Refresh financials from current cart (prices may have shifted)
+            order.subtotal              = subtotal
+            order.upa_discount          = upa_discount
+            order.amount_payable        = amount_payable
+            order.wallet_used           = wallet_amount
+            order.razorpay_amount       = razorpay_amount
+            order.save(update_fields=[
+                "payment_status", "order_status",
+                "razorpay_payment_id", "razorpay_order_id", "razorpay_signature",
+                "subtotal", "upa_discount", "amount_payable",
+                "wallet_used", "razorpay_amount",
+            ])
+
+            print(f"[checkout_confirm] AFTER  update — order.id={order.id}  order.order_status={order.order_status!r}  order.payment_status={order.payment_status!r}")
 
             # Deduct stock
             for idata in items_data:
@@ -299,30 +342,9 @@ class CheckoutConfirmView(LoginRequiredMixin, APIView):
                     wallet=wallet,
                     type="debit",
                     amount=wallet_amount,
-                    reason=f"Payment for order",
+                    reason="Payment for order",
                     reference=data["razorpay_order_id"] or "wallet-only",
                 )
-
-            # Create Order
-            order = Order.objects.create(
-                user=request.user,
-                address_name=address.name,
-                address_phone=address.phone,
-                address_line=address.address_line,
-                address_city=address.city,
-                address_state=address.state,
-                address_pincode=address.pincode,
-                subtotal=subtotal,
-                upa_discount=upa_discount,
-                amount_payable=amount_payable,
-                wallet_used=wallet_amount,
-                razorpay_amount=razorpay_amount,
-                razorpay_order_id=data["razorpay_order_id"],
-                razorpay_payment_id=data["razorpay_payment_id"],
-                razorpay_signature=data["razorpay_signature"],
-                payment_status="paid",
-                order_status="pending",
-            )
 
             # Create OrderItems
             for idata in items_data:
