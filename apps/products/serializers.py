@@ -63,11 +63,12 @@ class ProductVariantSerializer(serializers.ModelSerializer):
 # ── ProductList ───────────────────────────────────────────────────────────────
 
 class ProductListSerializer(serializers.ModelSerializer):
-    category_name = serializers.CharField(source='category.name', read_only=True)
-    primary_image = serializers.SerializerMethodField()
-    stock_label   = serializers.SerializerMethodField()
-    variant_count = serializers.SerializerMethodField()
-    total_stock   = serializers.SerializerMethodField()
+    category_name    = serializers.CharField(source='category.name', read_only=True)
+    primary_image    = serializers.SerializerMethodField()
+    stock_label      = serializers.SerializerMethodField()
+    variant_count    = serializers.SerializerMethodField()
+    total_stock      = serializers.SerializerMethodField()
+    first_variant_id = serializers.SerializerMethodField()
 
     class Meta:
         model  = Product
@@ -75,6 +76,7 @@ class ProductListSerializer(serializers.ModelSerializer):
             'id', 'name', 'slug', 'mrp', 'primary_image',
             'category_name', 'is_published',
             'stock_label', 'total_stock', 'variant_count',
+            'first_variant_id',
         ]
 
     def get_primary_image(self, obj):
@@ -101,6 +103,12 @@ class ProductListSerializer(serializers.ModelSerializer):
 
     def get_variant_count(self, obj):
         return obj.variants.filter(is_active=True).count()
+
+    def get_first_variant_id(self, obj):
+        variant = obj.variants.filter(is_active=True, stock_quantity__gt=0).first()
+        if not variant:
+            variant = obj.variants.filter(is_active=True).first()
+        return str(variant.id) if variant else None
 
 
 # ── ProductDetail ─────────────────────────────────────────────────────────────

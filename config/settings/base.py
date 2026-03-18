@@ -9,6 +9,11 @@ BASE_DIR = Path(__file__).resolve().parent.parent.parent
 
 SECRET_KEY = os.environ.get("SECRET_KEY", "change-me-in-production")
 
+# ── Payment ───────────────────────────────────────────────────────────────────
+MOCK_PAYMENT_MODE = os.environ.get("MOCK_PAYMENT_MODE", "True").strip().lower() in ("true", "1", "yes")
+RAZORPAY_KEY_ID     = os.environ.get("RAZORPAY_KEY_ID", "")
+RAZORPAY_KEY_SECRET = os.environ.get("RAZORPAY_KEY_SECRET", "")
+
 ALLOWED_HOSTS = os.environ.get("ALLOWED_HOSTS", "localhost 127.0.0.1").split()
 
 DJANGO_APPS = [
@@ -37,6 +42,7 @@ LOCAL_APPS = [
     "apps.wallet",
     "apps.upa_tree",
     "apps.products",
+    "apps.orders",
 ]
 
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
