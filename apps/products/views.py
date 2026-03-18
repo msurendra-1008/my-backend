@@ -1,4 +1,5 @@
-from django.db.models import Q
+from django.db.models import Q, Sum, Case, When, IntegerField, Value
+from django.db.models.functions import Coalesce
 from django.shortcuts import get_object_or_404
 
 from rest_framework import viewsets, status
@@ -29,9 +30,15 @@ class _ProductPagination(PageNumberPagination):
 # ── Category ──────────────────────────────────────────────────────────────────
 
 class CategoryViewSet(viewsets.ModelViewSet):
-    queryset         = Category.objects.select_related('parent').order_by('name')
     serializer_class = CategorySerializer
     lookup_field     = 'slug'
+
+    def get_queryset(self):
+        qs = Category.objects.select_related('parent').order_by('name')
+        search = self.request.query_params.get('search')
+        if search:
+            qs = qs.filter(name__icontains=search)
+        return qs
 
     def get_permissions(self):
         if self.action in ('list', 'retrieve'):
@@ -87,14 +94,46 @@ class ProductViewSet(viewsets.ModelViewSet):
         category_slug = self.request.query_params.get('category')
         search        = self.request.query_params.get('search')
         in_stock      = self.request.query_params.get('in_stock')
+        status_filter = self.request.query_params.get('status')
+        stock_filter  = self.request.query_params.get('stock')
 
         if category_slug:
             qs = qs.filter(category__slug=category_slug)
+
         if search:
-            qs = qs.filter(Q(name__icontains=search) | Q(description__icontains=search))
+            qs = qs.filter(Q(name__icontains=search) | Q(sku__icontains=search))
+
+        # Legacy boolean in_stock param (keep for backward compat)
         if in_stock == 'true':
-            # products that have at least one active variant with stock > 0
             qs = qs.filter(variants__stock_quantity__gt=0, variants__is_active=True).distinct()
+
+        # Status filter
+        if status_filter == 'published':
+            qs = qs.filter(is_published=True)
+        elif status_filter == 'unpublished':
+            qs = qs.filter(is_published=False)
+
+        # Stock level filter — annotate with total active stock, then filter by threshold
+        if stock_filter in ('in_stock', 'low_stock', 'out_of_stock'):
+            qs = qs.annotate(
+                _active_stock=Coalesce(
+                    Sum(
+                        Case(
+                            When(variants__is_active=True, then='variants__stock_quantity'),
+                            default=Value(0),
+                            output_field=IntegerField(),
+                        )
+                    ),
+                    Value(0),
+                    output_field=IntegerField(),
+                )
+            )
+            if stock_filter == 'in_stock':
+                qs = qs.filter(_active_stock__gt=10)
+            elif stock_filter == 'low_stock':
+                qs = qs.filter(_active_stock__gt=0, _active_stock__lte=10)
+            elif stock_filter == 'out_of_stock':
+                qs = qs.filter(_active_stock=0)
 
         return qs
 
