@@ -95,13 +95,14 @@ class CheckoutInitiateSerializer(serializers.Serializer):
 
 
 class CheckoutConfirmSerializer(serializers.Serializer):
+    internal_order_id   = serializers.UUIDField()
     address_id          = serializers.UUIDField()
     wallet_amount       = serializers.DecimalField(
         max_digits=12, decimal_places=2, min_value=Decimal("0"), default=Decimal("0")
     )
-    razorpay_order_id   = serializers.CharField()
-    razorpay_payment_id = serializers.CharField()
-    razorpay_signature  = serializers.CharField()
+    razorpay_order_id   = serializers.CharField(allow_blank=True)
+    razorpay_payment_id = serializers.CharField(allow_blank=True)
+    razorpay_signature  = serializers.CharField(allow_blank=True)
 
 
 # ── Order ─────────────────────────────────────────────────────────────────────
