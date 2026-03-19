@@ -6,7 +6,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ("orders", "0001_initial"),
+        ('orders', '0002_alter_order_order_status'),
     ]
 
     operations = [
@@ -31,22 +31,6 @@ class Migration(migrations.Migration):
                 ],
                 default="pending",
                 max_length=30,
-            ),
-        ),
-        migrations.AlterField(
-            model_name="order",
-            name="order_status",
-            field=models.CharField(
-                choices=[
-                    ("pending", "Pending"),
-                    ("confirmed", "Confirmed"),
-                    ("processing", "Processing"),
-                    ("shipped", "Shipped"),
-                    ("delivered", "Delivered"),
-                    ("cancelled", "Cancelled"),
-                ],
-                default="pending",
-                max_length=15,
             ),
         ),
     ]
