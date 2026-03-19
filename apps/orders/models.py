@@ -62,12 +62,12 @@ class CartItem(BaseModel):
 # ── Order ─────────────────────────────────────────────────────────────────────
 
 ORDER_STATUS_CHOICES = [
-    ("pending",    "Pending"),
-    ("confirmed",  "Confirmed"),
-    ("processing", "Processing"),
-    ("shipped",    "Shipped"),
-    ("delivered",  "Delivered"),
-    ("cancelled",  "Cancelled"),
+    ("pending",   "Pending"),
+    ("confirmed", "Confirmed"),
+    ("packed",    "Packed"),
+    ("shipped",   "Shipped"),
+    ("delivered", "Delivered"),
+    ("cancelled", "Cancelled"),
 ]
 
 PAYMENT_STATUS_CHOICES = [
