@@ -22,7 +22,8 @@ class CartAdmin(admin.ModelAdmin):
 class OrderItemInline(admin.TabularInline):
     model = OrderItem
     extra = 0
-    readonly_fields = ["product_name", "variant_name", "sku", "mrp", "upa_price", "quantity", "line_total"]
+    readonly_fields = ["product_name", "variant_name", "sku", "mrp", "upa_price", "quantity", "line_total", "status"]
+    can_delete = False
 
 
 @admin.register(Order)
@@ -36,3 +37,10 @@ class OrderAdmin(admin.ModelAdmin):
         "wallet_used", "razorpay_amount", "razorpay_order_id",
         "razorpay_payment_id", "razorpay_signature",
     ]
+
+
+@admin.register(OrderItem)
+class OrderItemAdmin(admin.ModelAdmin):
+    list_display  = ["order", "product_name", "variant_name", "quantity", "upa_price", "status"]
+    list_filter   = ["status"]
+    search_fields = ["order__order_number", "product_name"]
