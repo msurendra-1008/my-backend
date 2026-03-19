@@ -112,7 +112,7 @@ class OrderItemSerializer(serializers.ModelSerializer):
         model  = OrderItem
         fields = [
             "id", "product_name", "variant_name", "sku",
-            "mrp", "upa_price", "quantity", "line_total",
+            "mrp", "upa_price", "quantity", "line_total", "status",
         ]
 
 

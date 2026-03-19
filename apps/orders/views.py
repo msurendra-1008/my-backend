@@ -15,7 +15,7 @@ from apps.authentication.permissions import IsAdmin, IsAdminOrEmployee, IsUPAUse
 from apps.products.models import ProductVariant
 from apps.products.utils import get_upa_price
 from apps.wallet.models import Wallet, WalletTransaction
-from .models import Address, Cart, CartItem, Order, OrderItem
+from .models import Address, Cart, CartItem, Order, OrderItem, RETURN_EXCHANGE_STATUSES
 from .razorpay import create_razorpay_order, verify_razorpay_signature
 from .serializers import (
     AddressSerializer,
@@ -360,6 +360,9 @@ class CheckoutConfirmView(LoginRequiredMixin, APIView):
                     line_total=idata["line_total"],
                 )
 
+            # Set all order items to 'confirmed'
+            order.items.all().update(status="confirmed")
+
             # Clear cart
             cart.items.all().delete()
 
@@ -441,4 +444,12 @@ class AdminOrderViewSet(LoginRequiredMixin, viewsets.ModelViewSet):
         ser = AdminOrderUpdateSerializer(order, data=request.data, partial=True)
         ser.is_valid(raise_exception=True)
         ser.save()
+
+        # Sync item statuses (exclude return/exchange flow items)
+        new_order_status = ser.validated_data.get("order_status")
+        if new_order_status:
+            order.items.exclude(status__in=RETURN_EXCHANGE_STATUSES).update(
+                status=new_order_status
+            )
+
         return Response(OrderDetailSerializer(order).data)

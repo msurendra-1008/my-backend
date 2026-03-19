@@ -123,6 +123,29 @@ class Order(BaseModel):
         return self.order_number
 
 
+ORDER_ITEM_STATUS = [
+    ("pending",            "Pending"),
+    ("confirmed",          "Confirmed"),
+    ("packed",             "Packed"),
+    ("shipped",            "Shipped"),
+    ("delivered",          "Delivered"),
+    ("return_requested",   "Return Requested"),
+    ("return_approved",    "Return Approved"),
+    ("return_rejected",    "Return Rejected"),
+    ("exchange_requested", "Exchange Requested"),
+    ("exchange_approved",  "Exchange Approved"),
+    ("exchange_rejected",  "Exchange Rejected"),
+    ("refunded",           "Refunded"),
+    ("exchanged",          "Exchanged"),
+]
+
+RETURN_EXCHANGE_STATUSES = {
+    "return_requested", "return_approved", "return_rejected",
+    "exchange_requested", "exchange_approved", "exchange_rejected",
+    "refunded", "exchanged",
+}
+
+
 class OrderItem(BaseModel):
     order        = models.ForeignKey(Order, on_delete=models.CASCADE, related_name="items")
     variant      = models.ForeignKey(
@@ -135,6 +158,9 @@ class OrderItem(BaseModel):
     upa_price    = models.DecimalField(max_digits=12, decimal_places=2)
     quantity     = models.PositiveIntegerField()
     line_total   = models.DecimalField(max_digits=12, decimal_places=2)
+    status       = models.CharField(
+        max_length=30, choices=ORDER_ITEM_STATUS, default="pending"
+    )
 
     class Meta:
         ordering = ["created_at"]
