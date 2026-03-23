@@ -53,6 +53,12 @@ class User(AbstractBaseUser, PermissionsMixin):
     def full_name(self):
         return f"{self.first_name} {self.last_name}".strip() or self.email or self.mobile or ''
 
+    def get_full_name(self):
+        return f"{self.first_name} {self.last_name}".strip() or self.email or self.mobile or str(self.id)
+
+    def get_short_name(self):
+        return self.first_name or self.email or self.mobile or str(self.id)
+
     # Backward compat
     @property
     def created_at(self):
