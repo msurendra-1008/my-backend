@@ -5,13 +5,26 @@ from django.db import models, transaction
 from django.utils import timezone
 
 
+# ── Settings helper ───────────────────────────────────────────────────────────
+
+def get_or_create_return_settings():
+    """Return the singleton ReturnSettings, creating with defaults if needed."""
+    from .models import ReturnSettings
+    return ReturnSettings.get()
+
+
 # ── Eligibility ───────────────────────────────────────────────────────────────
 
 def is_return_eligible(order_item):
     """
     Returns (eligible: bool, reason: str).
+    Uses max_attempts from ReturnSettings.
     """
-    if order_item.return_rejection_count >= 2:
+    from .models import ACTIVE_REQUEST_STATUSES, ReturnRequest
+
+    settings = get_or_create_return_settings()
+
+    if order_item.return_rejection_count >= settings.max_attempts:
         return False, "Maximum return attempts reached for this item."
 
     if order_item.status != "delivered":
@@ -20,8 +33,6 @@ def is_return_eligible(order_item):
     if not order_item.delivered_at:
         return False, "Delivery date not recorded for this item."
 
-    from .models import ReturnSettings, ACTIVE_REQUEST_STATUSES
-    settings = ReturnSettings.get()
     deadline = order_item.delivered_at + timedelta(days=settings.return_window_days)
 
     if timezone.now() > deadline:
@@ -29,7 +40,6 @@ def is_return_eligible(order_item):
             f"Return window of {settings.return_window_days} days has expired."
         )
 
-    from .models import ReturnRequest
     if ReturnRequest.objects.filter(
         order_item=order_item, status__in=ACTIVE_REQUEST_STATUSES
     ).exists():
@@ -45,10 +55,29 @@ def calculate_refund_amount(return_request):
     return Decimal(return_request.order_item.upa_price) * return_request.return_qty
 
 
+# ── Log creation helper ───────────────────────────────────────────────────────
+
+def create_log(return_request, action, actor=None, notes=""):
+    """Create a ReturnRequestLog entry for an action."""
+    from .models import ReturnRequestLog
+
+    actor_role = ""
+    if actor:
+        actor_role = getattr(actor, "role", "") or ""
+
+    return ReturnRequestLog.objects.create(
+        return_request=return_request,
+        action=action,
+        actor=actor,
+        actor_role=actor_role,
+        notes=notes,
+    )
+
+
 # ── Process approved return ───────────────────────────────────────────────────
 
 @transaction.atomic
-def process_approved_return(return_request):
+def process_approved_return(return_request, admin_user=None, admin_notes=""):
     from apps.wallet.models import Wallet, WalletTransaction
 
     refund_amount = calculate_refund_amount(return_request)
@@ -80,18 +109,23 @@ def process_approved_return(return_request):
     # Finalise request
     return_request.refund_amount = refund_amount
     return_request.status        = "completed"
+    return_request.waiting_for   = ""
     return_request.completed_at  = timezone.now()
-    return_request.save(update_fields=["refund_amount", "status", "completed_at"])
+    return_request.save(update_fields=["refund_amount", "status", "waiting_for", "completed_at"])
 
     # Update OrderItem
     return_request.order_item.status = "refunded"
     return_request.order_item.save(update_fields=["status"])
 
+    # Log
+    create_log(return_request, "completed", actor=admin_user,
+               notes=admin_notes or f"Approved — refund ₹{refund_amount}")
+
 
 # ── Process approved exchange ─────────────────────────────────────────────────
 
 @transaction.atomic
-def process_approved_exchange(return_request):
+def process_approved_exchange(return_request, admin_user=None, admin_notes=""):
     from apps.products.models import ProductVariant
     from apps.products.utils import get_upa_price
     from apps.wallet.models import Wallet, WalletTransaction
@@ -148,5 +182,10 @@ def process_approved_exchange(return_request):
     # Finalise request
     return_request.refund_amount = refund_amount
     return_request.status        = "completed"
+    return_request.waiting_for   = ""
     return_request.completed_at  = timezone.now()
-    return_request.save(update_fields=["refund_amount", "status", "completed_at"])
+    return_request.save(update_fields=["refund_amount", "status", "waiting_for", "completed_at"])
+
+    # Log
+    create_log(return_request, "completed", actor=admin_user,
+               notes=admin_notes or "Exchange approved")

@@ -19,6 +19,7 @@ DEFAULT_REASONS = [
 
 class ReturnSettings(BaseModel):
     return_window_days = models.PositiveIntegerField(default=7)
+    max_attempts       = models.PositiveIntegerField(default=2)
     predefined_reasons = models.JSONField(default=list)
     updated_by         = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
@@ -59,11 +60,18 @@ REQUEST_TYPE_CHOICES = [
 ]
 
 REQUEST_STATUS_CHOICES = [
-    ("raised",        "Raised"),
-    ("under_review",  "Under Review"),
-    ("approved",      "Approved"),
-    ("rejected",      "Rejected"),
-    ("completed",     "Completed"),
+    ("raised",          "Raised"),
+    ("under_review",    "Under Review"),
+    ("approved",        "Approved"),
+    ("rejected",        "Rejected"),
+    ("rejected_final",  "Rejected Final"),
+    ("completed",       "Completed"),
+]
+
+WAITING_FOR_CHOICES = [
+    ("admin", "Admin"),
+    ("user",  "User"),
+    ("",      "Nobody"),
 ]
 
 REFUND_MODE_CHOICES = [
@@ -72,6 +80,17 @@ REFUND_MODE_CHOICES = [
 ]
 
 ACTIVE_REQUEST_STATUSES = {"raised", "under_review", "approved"}
+
+LOG_ACTION_CHOICES = [
+    ("raised",        "Raised"),
+    ("info_requested","Info Requested"),
+    ("user_replied",  "User Replied"),
+    ("approved",      "Approved"),
+    ("rejected",      "Rejected"),
+    ("rejected_final","Rejected Final"),
+    ("re_raised",     "Re-raised"),
+    ("completed",     "Completed"),
+]
 
 
 class ReturnRequest(BaseModel):
@@ -89,6 +108,8 @@ class ReturnRequest(BaseModel):
     refund_mode   = models.CharField(max_length=20, choices=REFUND_MODE_CHOICES, default="wallet")
     admin_notes      = models.TextField(blank=True)
     user_reply_count = models.PositiveIntegerField(default=0)
+    waiting_for      = models.CharField(max_length=10, choices=WAITING_FOR_CHOICES, default="admin", blank=True)
+    attempt_count    = models.PositiveIntegerField(default=1)
     reviewed_at      = models.DateTimeField(null=True, blank=True)
     completed_at  = models.DateTimeField(null=True, blank=True)
     raised_by     = models.ForeignKey(
@@ -107,11 +128,38 @@ class ReturnRequest(BaseModel):
         return f"{self.request_type.upper()} #{self.id} — {self.order_item} ({self.status})"
 
 
+# ── ReturnRequestLog ──────────────────────────────────────────────────────────
+
+class ReturnRequestLog(BaseModel):
+    return_request = models.ForeignKey(
+        ReturnRequest, on_delete=models.CASCADE, related_name="logs",
+    )
+    action     = models.CharField(max_length=20, choices=LOG_ACTION_CHOICES)
+    actor      = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+        null=True, blank=True, related_name="return_log_actions",
+    )
+    actor_role = models.CharField(max_length=20, blank=True)
+    notes      = models.TextField(blank=True)
+
+    class Meta:
+        ordering = ["created_at"]
+
+    def __str__(self):
+        return f"{self.action} on {self.return_request_id} by {self.actor_id}"
+
+
 # ── ReturnPhoto ───────────────────────────────────────────────────────────────
 
 class ReturnPhoto(BaseModel):
-    return_request = models.ForeignKey(ReturnRequest, on_delete=models.CASCADE, related_name="photos")
-    photo          = models.ImageField(upload_to="returns/")
+    return_request = models.ForeignKey(
+        ReturnRequest, on_delete=models.CASCADE, related_name="photos",
+    )
+    log   = models.ForeignKey(
+        ReturnRequestLog, on_delete=models.SET_NULL,
+        null=True, blank=True, related_name="photos",
+    )
+    photo = models.ImageField(upload_to="returns/")
 
     class Meta:
         ordering = ["created_at"]

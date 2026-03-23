@@ -1,13 +1,13 @@
 from django.contrib import admin
 from django.utils.html import format_html
-from .models import ReturnRequest, ReturnPhoto, ReturnSettings
+from .models import ReturnRequest, ReturnPhoto, ReturnRequestLog, ReturnSettings
 
 
 class ReturnPhotoInline(admin.TabularInline):
     model = ReturnPhoto
     extra = 0
-    readonly_fields = ('photo_preview', 'created_at')
-    fields = ('photo_preview', 'created_at')
+    readonly_fields = ('photo_preview', 'log', 'created_at')
+    fields = ('photo_preview', 'log', 'created_at')
     can_delete = False
 
     def photo_preview(self, obj):
@@ -20,14 +20,31 @@ class ReturnPhotoInline(admin.TabularInline):
     photo_preview.short_description = 'Preview'
 
 
+class ReturnRequestLogInline(admin.TabularInline):
+    model = ReturnRequestLog
+    extra = 0
+    readonly_fields = ('action', 'actor', 'actor_role', 'notes', 'created_at')
+    fields = ('action', 'actor', 'actor_role', 'notes', 'created_at')
+    can_delete = False
+    ordering = ('created_at',)
+
+
+@admin.register(ReturnRequestLog)
+class ReturnRequestLogAdmin(admin.ModelAdmin):
+    list_display = ('id', 'return_request', 'action', 'actor', 'actor_role', 'created_at')
+    list_filter  = ('action', 'actor_role')
+    search_fields = ('return_request__id', 'actor__mobile', 'notes')
+    readonly_fields = ('return_request', 'actor', 'created_at')
+
+
 @admin.register(ReturnRequest)
 class ReturnRequestAdmin(admin.ModelAdmin):
     list_display = (
         'id', 'get_user', 'get_order_number', 'get_product',
-        'request_type', 'status', 'return_qty',
-        'refund_amount', 'created_at'
+        'request_type', 'status', 'waiting_for', 'attempt_count',
+        'return_qty', 'refund_amount', 'created_at'
     )
-    list_filter = ('status', 'request_type', 'created_at')
+    list_filter = ('status', 'request_type', 'waiting_for', 'created_at')
     search_fields = (
         'order_item__order__order_number',
         'order_item__order__user__mobile',
@@ -36,9 +53,10 @@ class ReturnRequestAdmin(admin.ModelAdmin):
     )
     readonly_fields = (
         'raised_by', 'created_at', 'reviewed_by',
-        'reviewed_at', 'completed_at', 'refund_amount'
+        'reviewed_at', 'completed_at', 'refund_amount',
+        'waiting_for', 'attempt_count',
     )
-    inlines = [ReturnPhotoInline]
+    inlines = [ReturnPhotoInline, ReturnRequestLogInline]
     ordering = ('-created_at',)
 
     def get_user(self, obj):
