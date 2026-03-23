@@ -4,6 +4,7 @@ from django.utils import timezone
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.pagination import PageNumberPagination
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from core.mixins import LoginRequiredMixin
@@ -27,6 +28,8 @@ class _ReturnPagination(PageNumberPagination):
 class ReturnSettingsViewSet(LoginRequiredMixin, viewsets.ViewSet):
 
     def get_permissions(self):
+        if self.action in ('retrieve', 'list'):
+            return [IsAuthenticated()]
         return [IsAdmin()]
 
     def list(self, request):
