@@ -11,6 +11,9 @@ def is_return_eligible(order_item):
     """
     Returns (eligible: bool, reason: str).
     """
+    if order_item.return_rejection_count >= 2:
+        return False, "Maximum return attempts reached for this item."
+
     if order_item.status != "delivered":
         return False, "Item must be delivered before raising a return or exchange request."
 

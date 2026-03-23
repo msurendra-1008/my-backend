@@ -161,7 +161,8 @@ class OrderItem(BaseModel):
     status       = models.CharField(
         max_length=30, choices=ORDER_ITEM_STATUS, default="pending"
     )
-    delivered_at = models.DateTimeField(null=True, blank=True)
+    delivered_at           = models.DateTimeField(null=True, blank=True)
+    return_rejection_count = models.PositiveIntegerField(default=0)
 
     class Meta:
         ordering = ["created_at"]
