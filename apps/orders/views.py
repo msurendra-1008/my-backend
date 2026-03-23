@@ -448,8 +448,14 @@ class AdminOrderViewSet(LoginRequiredMixin, viewsets.ModelViewSet):
         # Sync item statuses (exclude return/exchange flow items)
         new_order_status = ser.validated_data.get("order_status")
         if new_order_status:
-            order.items.exclude(status__in=RETURN_EXCHANGE_STATUSES).update(
-                status=new_order_status
-            )
+            items_qs = order.items.exclude(status__in=RETURN_EXCHANGE_STATUSES)
+            if new_order_status == "delivered":
+                from django.utils import timezone as tz
+                items_qs.filter(delivered_at__isnull=True).update(
+                    status=new_order_status, delivered_at=tz.now()
+                )
+                items_qs.filter(delivered_at__isnull=False).update(status=new_order_status)
+            else:
+                items_qs.update(status=new_order_status)
 
         return Response(OrderDetailSerializer(order).data)

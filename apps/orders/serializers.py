@@ -108,11 +108,15 @@ class CheckoutConfirmSerializer(serializers.Serializer):
 # ── Order ─────────────────────────────────────────────────────────────────────
 
 class OrderItemSerializer(serializers.ModelSerializer):
+    variant_id   = serializers.UUIDField(source="variant.id",           read_only=True, allow_null=True)
+    product_slug = serializers.CharField(source="variant.product.slug", read_only=True, allow_null=True)
+
     class Meta:
         model  = OrderItem
         fields = [
             "id", "product_name", "variant_name", "sku",
-            "mrp", "upa_price", "quantity", "line_total", "status",
+            "mrp", "upa_price", "quantity", "line_total",
+            "status", "delivered_at", "variant_id", "product_slug",
         ]
 
 
