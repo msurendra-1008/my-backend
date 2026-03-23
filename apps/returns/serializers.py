@@ -121,6 +121,7 @@ class ReturnRequestSerializer(serializers.ModelSerializer):
             "exchange_variant", "exchange_variant_name",
             "reason", "notes", "status",
             "refund_amount", "refund_mode", "admin_notes",
+            "user_reply_count",
             "raised_at", "reviewed_at", "completed_at",
             "raised_by", "raised_by_name",
             "photos", "updated_at",

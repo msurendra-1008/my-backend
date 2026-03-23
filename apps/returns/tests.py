@@ -392,3 +392,111 @@ class ReturnRequestTests(TestCase):
         wallet = Wallet.objects.get(user=self.user)
         # Should be 350 × 3 = 1050, NOT 999 × 3
         self.assertEqual(wallet.balance, Decimal("1050.00"))
+
+    # 13 ─────────────────────────────────────────────────────────────────────
+    def test_user_can_reply_when_under_review(self):
+        """User can POST user-reply when request is under_review; notes appended."""
+        self.client.force_authenticate(user=self.user)
+        item = make_delivered_item(self.user)
+        resp = self.client.post("/api/v1/returns/", {
+            "order_item_id": str(item.id),
+            "request_type":  "return",
+            "return_qty":    1,
+            "reason":        "Damaged product",
+        })
+        rr_id = resp.data["id"]
+
+        # Admin sets to under_review
+        self.client.force_authenticate(user=self.admin)
+        self.client.patch(f"/api/v1/returns/{rr_id}/request-info/", {
+            "admin_notes": "Please provide photos."
+        }, format="json")
+
+        # User replies
+        self.client.force_authenticate(user=self.user)
+        resp2 = self.client.post(f"/api/v1/returns/{rr_id}/user-reply/", {
+            "notes": "Here is more info."
+        }, format="json")
+        self.assertEqual(resp2.status_code, 200, resp2.data)
+        self.assertIn("[User reply]: Here is more info.", resp2.data["notes"])
+        self.assertEqual(resp2.data["user_reply_count"], 1)
+
+    # 14 ─────────────────────────────────────────────────────────────────────
+    def test_user_cannot_reply_when_not_under_review(self):
+        """user-reply on a 'raised' request returns 400."""
+        self.client.force_authenticate(user=self.user)
+        item = make_delivered_item(self.user, days_ago=1)
+        resp = self.client.post("/api/v1/returns/", {
+            "order_item_id": str(item.id),
+            "request_type":  "return",
+            "return_qty":    1,
+            "reason":        "Changed my mind",
+        })
+        rr_id = resp.data["id"]
+
+        resp2 = self.client.post(f"/api/v1/returns/{rr_id}/user-reply/", {
+            "notes": "This should fail."
+        }, format="json")
+        self.assertEqual(resp2.status_code, 400)
+
+    # 15 ─────────────────────────────────────────────────────────────────────
+    def test_rejection_increments_rejection_count(self):
+        """Rejecting a request increments order_item.return_rejection_count."""
+        self.client.force_authenticate(user=self.user)
+        item = make_delivered_item(self.user)
+
+        resp = self.client.post("/api/v1/returns/", {
+            "order_item_id": str(item.id),
+            "request_type":  "return",
+            "return_qty":    1,
+            "reason":        "Changed my mind",
+        })
+        rr_id = resp.data["id"]
+
+        self.client.force_authenticate(user=self.admin)
+        self.client.patch(f"/api/v1/returns/{rr_id}/reject/", {
+            "admin_notes": "Not eligible."
+        }, format="json")
+
+        item.refresh_from_db()
+        self.assertEqual(item.return_rejection_count, 1)
+
+    # 16 ─────────────────────────────────────────────────────────────────────
+    def test_cannot_raise_after_two_rejections(self):
+        """After 2 rejections, is_return_eligible returns False."""
+        self.client.force_authenticate(user=self.user)
+        item = make_delivered_item(self.user)
+
+        # First request → reject
+        r1 = self.client.post("/api/v1/returns/", {
+            "order_item_id": str(item.id),
+            "request_type":  "return",
+            "return_qty":    1,
+            "reason":        "Changed my mind",
+        })
+        self.client.force_authenticate(user=self.admin)
+        self.client.patch(f"/api/v1/returns/{r1.data['id']}/reject/")
+
+        # Second request → reject
+        self.client.force_authenticate(user=self.user)
+        r2 = self.client.post("/api/v1/returns/", {
+            "order_item_id": str(item.id),
+            "request_type":  "return",
+            "return_qty":    1,
+            "reason":        "Changed my mind",
+        })
+        self.assertEqual(r2.status_code, 201, r2.data)
+        self.client.force_authenticate(user=self.admin)
+        self.client.patch(f"/api/v1/returns/{r2.data['id']}/reject/")
+
+        # Third attempt must be blocked
+        self.client.force_authenticate(user=self.user)
+        r3 = self.client.post("/api/v1/returns/", {
+            "order_item_id": str(item.id),
+            "request_type":  "return",
+            "return_qty":    1,
+            "reason":        "Changed my mind",
+        })
+        self.assertEqual(r3.status_code, 400)
+        item.refresh_from_db()
+        self.assertEqual(item.return_rejection_count, 2)

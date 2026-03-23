@@ -108,8 +108,10 @@ class CheckoutConfirmSerializer(serializers.Serializer):
 # ── Order ─────────────────────────────────────────────────────────────────────
 
 class OrderItemSerializer(serializers.ModelSerializer):
-    variant_id   = serializers.UUIDField(source="variant.id",           read_only=True, allow_null=True)
-    product_slug = serializers.CharField(source="variant.product.slug", read_only=True, allow_null=True)
+    variant_id          = serializers.UUIDField(source="variant.id",           read_only=True, allow_null=True)
+    product_slug        = serializers.CharField(source="variant.product.slug", read_only=True, allow_null=True)
+    return_status       = serializers.SerializerMethodField()
+    return_admin_notes  = serializers.SerializerMethodField()
 
     class Meta:
         model  = OrderItem
@@ -117,7 +119,16 @@ class OrderItemSerializer(serializers.ModelSerializer):
             "id", "product_name", "variant_name", "sku",
             "mrp", "upa_price", "quantity", "line_total",
             "status", "delivered_at", "variant_id", "product_slug",
+            "return_rejection_count", "return_status", "return_admin_notes",
         ]
+
+    def get_return_status(self, obj):
+        rr = obj.return_requests.order_by("-created_at").first()
+        return rr.status if rr else None
+
+    def get_return_admin_notes(self, obj):
+        rr = obj.return_requests.order_by("-created_at").first()
+        return (rr.admin_notes or "") if rr else ""
 
 
 class OrderListSerializer(serializers.ModelSerializer):

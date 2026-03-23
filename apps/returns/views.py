@@ -60,11 +60,10 @@ class ReturnRequestViewSet(LoginRequiredMixin, viewsets.GenericViewSet):
         return qs.filter(raised_by=user)
 
     def get_permissions(self):
-        admin_actions = {"admin_list", "admin_detail", "approve", "reject", "request_info"}
-        if self.action in admin_actions:
-            return [IsAdminOrEmployee()]
         if self.action in {"approve", "reject"}:
             return [IsAdmin()]
+        if self.action in {"admin_list", "admin_detail", "request_info"}:
+            return [IsAdminOrEmployee()]
         return [IsUPAUser()]
 
     # ── User: list own requests ───────────────────────────────────────────────
@@ -109,6 +108,26 @@ class ReturnRequestViewSet(LoginRequiredMixin, viewsets.GenericViewSet):
         p = ReturnPhoto.objects.create(return_request=rr, photo=photo)
         from .serializers import ReturnPhotoSerializer
         return Response(ReturnPhotoSerializer(p).data, status=status.HTTP_201_CREATED)
+
+    # ── User: reply when admin requests more info ─────────────────────────────
+
+    @action(detail=True, methods=["post"], url_path="user-reply")
+    def user_reply(self, request, pk=None):
+        if not (request.user and request.user.is_authenticated and request.user.role == "upa_user"):
+            return Response({"detail": "Forbidden."}, status=403)
+        rr = get_object_or_404(ReturnRequest, pk=pk, raised_by=request.user)
+        if rr.status != "under_review":
+            return Response(
+                {"detail": "Replies are only allowed when the request is under review."},
+                status=400,
+            )
+        notes = request.data.get("notes", "").strip()
+        if not notes:
+            return Response({"detail": "Reply notes cannot be empty."}, status=400)
+        rr.notes = (rr.notes + "\n\n[User reply]: " + notes).strip()
+        rr.user_reply_count += 1
+        rr.save(update_fields=["notes", "user_reply_count"])
+        return Response(ReturnRequestSerializer(rr).data)
 
     # ── Admin: list all requests ──────────────────────────────────────────────
 
@@ -205,9 +224,10 @@ class ReturnRequestViewSet(LoginRequiredMixin, viewsets.GenericViewSet):
         rr.admin_notes  = request.data.get("admin_notes", rr.admin_notes)
         rr.save(update_fields=["reviewed_by", "reviewed_at", "status", "admin_notes"])
 
-        # Revert OrderItem status back to delivered
+        # Revert OrderItem status back to delivered and track rejection count
         rr.order_item.status = "delivered"
-        rr.order_item.save(update_fields=["status"])
+        rr.order_item.return_rejection_count += 1
+        rr.order_item.save(update_fields=["status", "return_rejection_count"])
 
         rr.refresh_from_db()
         return Response(ReturnRequestAdminSerializer(rr).data)

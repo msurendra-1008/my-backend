@@ -87,8 +87,9 @@ class ReturnRequest(BaseModel):
     status        = models.CharField(max_length=20, choices=REQUEST_STATUS_CHOICES, default="raised")
     refund_amount = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
     refund_mode   = models.CharField(max_length=20, choices=REFUND_MODE_CHOICES, default="wallet")
-    admin_notes   = models.TextField(blank=True)
-    reviewed_at   = models.DateTimeField(null=True, blank=True)
+    admin_notes      = models.TextField(blank=True)
+    user_reply_count = models.PositiveIntegerField(default=0)
+    reviewed_at      = models.DateTimeField(null=True, blank=True)
     completed_at  = models.DateTimeField(null=True, blank=True)
     raised_by     = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
