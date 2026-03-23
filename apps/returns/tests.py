@@ -1,5 +1,5 @@
 """
-apps.returns — 13 tests covering the full return/exchange lifecycle.
+apps.returns — 22 tests covering the full return/exchange lifecycle.
 """
 import io
 from decimal import Decimal
@@ -500,3 +500,152 @@ class ReturnRequestTests(TestCase):
         self.assertEqual(r3.status_code, 400)
         item.refresh_from_db()
         self.assertEqual(item.return_rejection_count, 2)
+
+    # 17 ─────────────────────────────────────────────────────────────────────
+    def test_raise_creates_log_entry(self):
+        """Raising a return creates a ReturnRequestLog with action='raised'."""
+        from apps.returns.models import ReturnRequestLog
+        self.client.force_authenticate(user=self.user)
+        item = make_delivered_item(self.user)
+        resp = self.client.post("/api/v1/returns/", {
+            "order_item_id": str(item.id),
+            "request_type":  "return",
+            "return_qty":    1,
+            "reason":        "Changed my mind",
+        })
+        self.assertEqual(resp.status_code, 201)
+        rr_id = resp.data["id"]
+        self.assertTrue(
+            ReturnRequestLog.objects.filter(return_request_id=rr_id, action="raised").exists()
+        )
+
+    # 18 ─────────────────────────────────────────────────────────────────────
+    def test_request_info_sets_waiting_for_user(self):
+        """request-info sets waiting_for='user' and status='under_review'."""
+        self.client.force_authenticate(user=self.user)
+        item = make_delivered_item(self.user)
+        resp = self.client.post("/api/v1/returns/", {
+            "order_item_id": str(item.id),
+            "request_type":  "return",
+            "return_qty":    1,
+            "reason":        "Damaged product",
+        })
+        rr_id = resp.data["id"]
+
+        self.client.force_authenticate(user=self.admin)
+        r2 = self.client.patch(f"/api/v1/returns/{rr_id}/request-info/", {
+            "admin_notes": "Please send a photo of the damage."
+        }, format="json")
+        self.assertEqual(r2.status_code, 200, r2.data)
+        self.assertEqual(r2.data["waiting_for"], "user")
+        self.assertEqual(r2.data["status"], "under_review")
+
+    # 19 ─────────────────────────────────────────────────────────────────────
+    def test_request_info_requires_admin_notes(self):
+        """request-info without admin_notes returns 400."""
+        self.client.force_authenticate(user=self.user)
+        item = make_delivered_item(self.user)
+        resp = self.client.post("/api/v1/returns/", {
+            "order_item_id": str(item.id),
+            "request_type":  "return",
+            "return_qty":    1,
+            "reason":        "Damaged product",
+        })
+        rr_id = resp.data["id"]
+
+        self.client.force_authenticate(user=self.admin)
+        r2 = self.client.patch(f"/api/v1/returns/{rr_id}/request-info/", {}, format="json")
+        self.assertEqual(r2.status_code, 400)
+
+    # 20 ─────────────────────────────────────────────────────────────────────
+    def test_user_reply_sets_waiting_for_admin(self):
+        """user-reply sets waiting_for='admin'."""
+        self.client.force_authenticate(user=self.user)
+        item = make_delivered_item(self.user)
+        resp = self.client.post("/api/v1/returns/", {
+            "order_item_id": str(item.id),
+            "request_type":  "return",
+            "return_qty":    1,
+            "reason":        "Damaged product",
+        })
+        rr_id = resp.data["id"]
+
+        # Admin requests info
+        self.client.force_authenticate(user=self.admin)
+        self.client.patch(f"/api/v1/returns/{rr_id}/request-info/", {
+            "admin_notes": "Need more info."
+        }, format="json")
+
+        # User replies
+        self.client.force_authenticate(user=self.user)
+        r2 = self.client.post(f"/api/v1/returns/{rr_id}/user-reply/", {
+            "notes": "Here is the info."
+        }, format="json")
+        self.assertEqual(r2.status_code, 200)
+        self.assertEqual(r2.data["waiting_for"], "admin")
+
+    # 21 ─────────────────────────────────────────────────────────────────────
+    def test_reject_sets_rejected_final_on_max_attempts(self):
+        """Second rejection sets status='rejected_final'."""
+        self.client.force_authenticate(user=self.user)
+        item = make_delivered_item(self.user)
+
+        # First reject
+        r1 = self.client.post("/api/v1/returns/", {
+            "order_item_id": str(item.id),
+            "request_type":  "return",
+            "return_qty":    1,
+            "reason":        "Changed my mind",
+        })
+        self.client.force_authenticate(user=self.admin)
+        self.client.patch(f"/api/v1/returns/{r1.data['id']}/reject/", {
+            "admin_notes": "Rejected first time."
+        }, format="json")
+
+        # Second reject
+        self.client.force_authenticate(user=self.user)
+        r2 = self.client.post("/api/v1/returns/", {
+            "order_item_id": str(item.id),
+            "request_type":  "return",
+            "return_qty":    1,
+            "reason":        "Changed my mind",
+        })
+        self.assertEqual(r2.status_code, 201, r2.data)
+        self.client.force_authenticate(user=self.admin)
+        resp_reject = self.client.patch(f"/api/v1/returns/{r2.data['id']}/reject/", {
+            "admin_notes": "Final rejection."
+        }, format="json")
+        self.assertEqual(resp_reject.status_code, 200)
+        self.assertEqual(resp_reject.data["status"], "rejected_final")
+
+    # 22 ─────────────────────────────────────────────────────────────────────
+    def test_attempt_count_increments_on_re_raise(self):
+        """attempt_count is 1 on first raise and 2 on re-raise after rejection."""
+        self.client.force_authenticate(user=self.user)
+        item = make_delivered_item(self.user)
+
+        r1 = self.client.post("/api/v1/returns/", {
+            "order_item_id": str(item.id),
+            "request_type":  "return",
+            "return_qty":    1,
+            "reason":        "Changed my mind",
+        })
+        self.assertEqual(r1.status_code, 201)
+        self.assertEqual(r1.data["attempt_count"], 1)
+
+        # Admin rejects
+        self.client.force_authenticate(user=self.admin)
+        self.client.patch(f"/api/v1/returns/{r1.data['id']}/reject/", {
+            "admin_notes": "Not eligible."
+        }, format="json")
+
+        # Re-raise
+        self.client.force_authenticate(user=self.user)
+        r2 = self.client.post("/api/v1/returns/", {
+            "order_item_id": str(item.id),
+            "request_type":  "return",
+            "return_qty":    1,
+            "reason":        "Changed my mind",
+        })
+        self.assertEqual(r2.status_code, 201, r2.data)
+        self.assertEqual(r2.data["attempt_count"], 2)
