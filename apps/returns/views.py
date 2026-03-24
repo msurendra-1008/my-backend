@@ -184,7 +184,20 @@ class ReturnRequestViewSet(LoginRequiredMixin, viewsets.GenericViewSet):
 
         page = self.paginate_queryset(qs)
         ser  = ReturnRequestAdminSerializer(page if page is not None else qs, many=True)
-        return self.get_paginated_response(ser.data) if page is not None else Response(ser.data)
+        response = self.get_paginated_response(ser.data) if page is not None else Response(ser.data)
+
+        # Embed global stats (unaffected by current filters)
+        response.data["stats"] = {
+            "total":          ReturnRequest.objects.count(),
+            "pending_review": ReturnRequest.objects.filter(
+                status__in=["raised", "under_review"]
+            ).count(),
+            "approved":       ReturnRequest.objects.filter(status="completed").count(),
+            "rejected":       ReturnRequest.objects.filter(
+                status__in=["rejected", "rejected_final"]
+            ).count(),
+        }
+        return response
 
     # ── Admin: single request detail ──────────────────────────────────────────
 
