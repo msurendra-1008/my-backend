@@ -21,6 +21,22 @@ class IsUPAUser(BasePermission):
         return bool(request.user and request.user.is_authenticated and request.user.role == 'upa_user')
 
 
+class IsVendor(BasePermission):
+    def has_permission(self, request, view):
+        return bool(request.user and request.user.is_authenticated and request.user.role == 'vendor')
+
+
+class IsApprovedVendor(BasePermission):
+    def has_permission(self, request, view):
+        return (
+            request.user and
+            request.user.is_authenticated and
+            request.user.role == 'vendor' and
+            hasattr(request.user, 'vendor_profile') and
+            request.user.vendor_profile.status == 'approved'
+        )
+
+
 class HasPermission(BasePermission):
     def __init__(self, perm):
         self.perm = perm

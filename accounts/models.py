@@ -23,6 +23,7 @@ class User(AbstractBaseUser, PermissionsMixin):
         ('admin', 'Admin'),
         ('employee', 'Employee'),
         ('upa_user', 'UPA User'),
+        ('vendor', 'Vendor'),
     ]
 
     id          = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
