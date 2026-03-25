@@ -40,7 +40,10 @@ class VendorAuthViewSet(viewsets.ViewSet):
         serializer.is_valid(raise_exception=True)
         profile = serializer.save()
         return Response(
-            VendorProfileSerializer(profile, context={'request': request}).data,
+            {
+                **_tokens(profile.user),
+                'profile': VendorProfileSerializer(profile, context={'request': request}).data,
+            },
             status=status.HTTP_201_CREATED,
         )
 
