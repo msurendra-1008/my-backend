@@ -1,13 +1,14 @@
 """
-apps.vendors — 16 tests covering the vendor registration, auth, profile, and admin flow.
+apps.vendors — tests covering vendor registration, auth, profile, admin flow, and vendor products.
 """
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
 from rest_framework.test import APIClient
+from rest_framework_simplejwt.tokens import RefreshToken
 
 from accounts.models import User
-from apps.products.models import Category
-from .models import VendorDocument, VendorProfile
+from apps.products.models import Category, Product
+from .models import VendorDocument, VendorProfile, VendorProduct
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -226,3 +227,157 @@ class VendorAdminTests(TestCase):
         profile = VendorProfile.objects.get(pk=self.vendor_id)
         self.assertEqual(profile.status, "docs_requested")
         self.assertEqual(profile.admin_notes, "Please upload PAN card copy.")
+
+
+# ── Vendor Product Tests ───────────────────────────────────────────────────────
+
+PRODUCT_DATA = {
+    "name":        "Premium Cotton Fabric",
+    "description": "High quality cotton",
+    "sku":         "FABRIC-001",
+    "variants": [
+        {"name": "White 1m", "variant_type": "size", "sku": "FABRIC-001-W", "mrp": "250.00", "is_active": True},
+    ],
+}
+
+
+def make_approved_vendor(mobile="9800000001", gst="55EEEEE0000E5Z9", email="vendor@test.com"):
+    """Creates a vendor user and approves them directly."""
+    cat = Category.objects.get_or_create(name="Fabrics", defaults={"slug": "fabrics"})[0]
+    user = User.objects.create_user(password="pass", mobile=mobile, email=email, role="vendor",
+                                    first_name="Test", last_name="Vendor")
+    profile = VendorProfile.objects.create(
+        user=user, company_name="Test Co", gst_number=gst,
+        contact_name="Test Vendor", address_line1="123 Road",
+        city="Delhi", state="Delhi", pincode="110001", status="approved",
+    )
+    profile.categories.add(cat)
+    return profile
+
+
+def vendor_token(profile):
+    return str(RefreshToken.for_user(profile.user).access_token)
+
+
+class VendorProductCreateTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.profile = make_approved_vendor()
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {vendor_token(self.profile)}")
+
+    def test_approved_vendor_can_create_product(self):
+        """Approved vendor submits a product → 201, status=pending_approval"""
+        data = {**PRODUCT_DATA, "category_name": "Fabrics"}
+        res = self.client.post("/api/v1/vendor/products/", data, format="json")
+        self.assertEqual(res.status_code, 201)
+        self.assertEqual(res.data["status"], "pending_approval")
+        self.assertEqual(VendorProduct.objects.count(), 1)
+
+    def test_pending_vendor_cannot_create_product(self):
+        """Pending (not approved) vendor → 403"""
+        user2 = User.objects.create_user(password="pass", mobile="9800000002", role="vendor", first_name="P", last_name="V")
+        cat = Category.objects.first()
+        profile2 = VendorProfile.objects.create(
+            user=user2, company_name="Pending Co", gst_number="66FFFFF0000F6Z0",
+            contact_name="P V", address_line1="1 Road", city="Delhi", state="Delhi",
+            pincode="110001", status="pending",
+        )
+        profile2.categories.add(cat)
+        c = APIClient()
+        c.credentials(HTTP_AUTHORIZATION=f"Bearer {vendor_token(profile2)}")
+        res = c.post("/api/v1/vendor/products/", {**PRODUCT_DATA, "category_name": "Fabrics"}, format="json")
+        self.assertEqual(res.status_code, 403)
+
+    def test_product_requires_at_least_one_variant(self):
+        """Submitting product with no variants → 400"""
+        data = {**PRODUCT_DATA, "variants": [], "category_name": "Fabrics"}
+        res = self.client.post("/api/v1/vendor/products/", data, format="json")
+        self.assertEqual(res.status_code, 400)
+        self.assertIn("variants", res.data)
+
+    def test_new_category_created_inline(self):
+        """Submitting a product with unknown category_name → new Category created"""
+        data = {**PRODUCT_DATA, "sku": "FABRIC-099", "variants": [
+            {"name": "Red 1m", "variant_type": "colour", "sku": "FABRIC-099-R", "mrp": "300.00", "is_active": True}
+        ], "category_name": "Unique Brand New Category"}
+        res = self.client.post("/api/v1/vendor/products/", data, format="json")
+        self.assertEqual(res.status_code, 201)
+        self.assertTrue(Category.objects.filter(name__iexact="Unique Brand New Category").exists())
+
+    def test_vendor_can_list_own_products(self):
+        """Vendor lists own products → only own products returned"""
+        self.client.post("/api/v1/vendor/products/", {**PRODUCT_DATA, "category_name": "Fabrics"}, format="json")
+        res = self.client.get("/api/v1/vendor/products/")
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.data["count"], 1)
+
+    def test_edit_approved_product_resets_to_pending(self):
+        """Editing an approved product → status resets to pending_approval"""
+        res = self.client.post("/api/v1/vendor/products/", {**PRODUCT_DATA, "category_name": "Fabrics"}, format="json")
+        pid = res.data["id"]
+        vp = VendorProduct.objects.get(pk=pid)
+        vp.status = "approved"
+        vp.save()
+        res2 = self.client.patch(f"/api/v1/vendor/products/{pid}/", {"name": "Updated Name"}, format="json")
+        self.assertEqual(res2.status_code, 200)
+        self.assertEqual(res2.data["status"], "pending_approval")
+
+    def test_deactivate_and_reactivate_product(self):
+        """Vendor deactivates product → not_continued; reactivates → pending_approval"""
+        res = self.client.post("/api/v1/vendor/products/", {**PRODUCT_DATA, "category_name": "Fabrics"}, format="json")
+        pid = res.data["id"]
+        res2 = self.client.patch(f"/api/v1/vendor/products/{pid}/deactivate/", {}, format="json")
+        self.assertEqual(res2.data["status"], "not_continued")
+        res3 = self.client.patch(f"/api/v1/vendor/products/{pid}/reactivate/", {}, format="json")
+        self.assertEqual(res3.data["status"], "pending_approval")
+
+
+class VendorProductAdminTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.profile = make_approved_vendor()
+        # Create a vendor product
+        vc = APIClient()
+        vc.credentials(HTTP_AUTHORIZATION=f"Bearer {vendor_token(self.profile)}")
+        res = vc.post("/api/v1/vendor/products/", {**PRODUCT_DATA, "category_name": "Fabrics"}, format="json")
+        self.product_id = res.data["id"]
+        # Admin client
+        self.admin = User.objects.create_user(password="pass", mobile="9900009999", role="admin", first_name="Admin")
+        admin_tok = str(RefreshToken.for_user(self.admin).access_token)
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {admin_tok}")
+
+    def test_admin_list_vendor_products(self):
+        """Admin lists vendor products → paginated + stats"""
+        res = self.client.get("/api/v1/vendor/admin-products/")
+        self.assertEqual(res.status_code, 200)
+        self.assertIn("stats", res.data)
+        self.assertEqual(res.data["count"], 1)
+
+    def test_admin_approve_creates_catalog_product(self):
+        """Admin approves vendor product → catalog Product created, is_published=False, stock=0"""
+        res = self.client.patch(f"/api/v1/vendor/admin-products/{self.product_id}/approve/", {}, format="json")
+        self.assertEqual(res.status_code, 200)
+        vp = VendorProduct.objects.get(pk=self.product_id)
+        self.assertEqual(vp.status, "approved")
+        self.assertIsNotNone(vp.catalog_product)
+        cat_product = vp.catalog_product
+        self.assertFalse(cat_product.is_published)
+        self.assertEqual(cat_product.variants.first().stock_quantity, 0)
+        self.assertEqual(str(res.data["catalog_product_id"]), str(cat_product.id))
+
+    def test_admin_reject_without_reason_returns_400(self):
+        """Admin rejects without reason → 400"""
+        res = self.client.patch(f"/api/v1/vendor/admin-products/{self.product_id}/reject/", {}, format="json")
+        self.assertEqual(res.status_code, 400)
+
+    def test_admin_reject_with_reason(self):
+        """Admin rejects with reason → status=rejected"""
+        res = self.client.patch(
+            f"/api/v1/vendor/admin-products/{self.product_id}/reject/",
+            {"reason": "Poor quality images."},
+            format="json",
+        )
+        self.assertEqual(res.status_code, 200)
+        vp = VendorProduct.objects.get(pk=self.product_id)
+        self.assertEqual(vp.status, "rejected")
+        self.assertEqual(vp.rejection_reason, "Poor quality images.")
