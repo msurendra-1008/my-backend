@@ -368,6 +368,14 @@ class PurchaseOrderViewSet(viewsets.ViewSet):
         if notes:
             po.vendor_notes = notes
         po.save(update_fields=['status', 'dispatched_at', 'vendor_notes'])
+
+        # Auto-create incoming shipment for inspection
+        from apps.inspection.models import IncomingShipment
+        IncomingShipment.objects.get_or_create(
+            purchase_order=po,
+            defaults={'expected_quantity': po.quantity, 'status': 'awaiting_inspection'},
+        )
+
         return Response(PurchaseOrderSerializer(po, context={'request': request}).data)
 
     @action(detail=True, methods=['patch'], url_path='admin-status',
