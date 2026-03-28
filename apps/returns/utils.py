@@ -99,12 +99,36 @@ def process_approved_return(return_request, admin_user=None, admin_notes=""):
         triggered_by=return_request.reviewed_by,
     )
 
-    # Restock inventory
+    # Restock inventory — return to original rack if known, else direct update
     if return_request.order_item.variant_id:
         from apps.products.models import ProductVariant
-        ProductVariant.objects.filter(
-            pk=return_request.order_item.variant_id
-        ).update(stock_quantity=models.F("stock_quantity") + return_request.return_qty)
+        variant_id = return_request.order_item.variant_id
+        qty = return_request.return_qty
+        restocked = False
+        try:
+            from apps.warehouse.models import StockMovement
+            from apps.warehouse.utils import assign_stock_to_rack
+            last_inbound = (
+                StockMovement.objects.filter(variant_id=variant_id, movement_type='inbound')
+                .order_by('-created_at')
+                .first()
+            )
+            if last_inbound:
+                variant_obj = ProductVariant.objects.get(pk=variant_id)
+                assign_stock_to_rack(
+                    rack=last_inbound.rack,
+                    variant=variant_obj,
+                    quantity=qty,
+                    reference=str(return_request.id),
+                    notes='Return restock',
+                )
+                restocked = True
+        except Exception:
+            pass
+        if not restocked:
+            ProductVariant.objects.filter(pk=variant_id).update(
+                stock_quantity=models.F("stock_quantity") + qty
+            )
 
     # Finalise request
     return_request.refund_amount = refund_amount
@@ -139,17 +163,44 @@ def process_approved_exchange(return_request, admin_user=None, admin_notes=""):
     if new_v.stock_quantity < return_request.return_qty:
         raise ValueError("Requested exchange variant is out of stock.")
 
-    # Restock old variant
+    # Restock old variant — return to original rack if known
     old_variant_id = return_request.order_item.variant_id
     if old_variant_id:
-        ProductVariant.objects.filter(pk=old_variant_id).update(
-            stock_quantity=models.F("stock_quantity") + return_request.return_qty
-        )
+        qty = return_request.return_qty
+        restocked = False
+        try:
+            from apps.warehouse.models import StockMovement
+            from apps.warehouse.utils import assign_stock_to_rack
+            last_inbound = (
+                StockMovement.objects.filter(variant_id=old_variant_id, movement_type='inbound')
+                .order_by('-created_at')
+                .first()
+            )
+            if last_inbound:
+                old_v_obj = ProductVariant.objects.get(pk=old_variant_id)
+                assign_stock_to_rack(
+                    rack=last_inbound.rack,
+                    variant=old_v_obj,
+                    quantity=qty,
+                    reference=str(return_request.id),
+                    notes='Exchange restock (old variant)',
+                )
+                restocked = True
+        except Exception:
+            pass
+        if not restocked:
+            ProductVariant.objects.filter(pk=old_variant_id).update(
+                stock_quantity=models.F("stock_quantity") + qty
+            )
 
-    # Deduct new variant
-    ProductVariant.objects.filter(pk=new_v.pk).update(
-        stock_quantity=models.F("stock_quantity") - return_request.return_qty
-    )
+    # Deduct new variant (FIFO from racks)
+    try:
+        from apps.warehouse.utils import deduct_stock as fifo_deduct
+        fifo_deduct(new_v, return_request.return_qty, reference=str(return_request.id))
+    except (ValueError, Exception):
+        ProductVariant.objects.filter(pk=new_v.pk).update(
+            stock_quantity=models.F("stock_quantity") - return_request.return_qty
+        )
 
     # Credit price difference if new variant is cheaper
     old_upa   = Decimal(return_request.order_item.upa_price)

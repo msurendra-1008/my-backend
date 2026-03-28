@@ -140,7 +140,15 @@ class IncomingShipmentViewSet(viewsets.ViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        update_product_stock(shipment.report, request.user)
+        rack = None
+        rack_id = request.data.get('rack_id')
+        if rack_id:
+            try:
+                from apps.warehouse.models import Rack
+                rack = Rack.objects.get(pk=rack_id, is_active=True)
+            except Exception:
+                return Response({'detail': 'Invalid rack_id.'}, status=status.HTTP_400_BAD_REQUEST)
+        update_product_stock(shipment.report, request.user, rack=rack)
         return Response(
             InspectionReportReadSerializer(shipment.report, context={'request': request}).data,
         )

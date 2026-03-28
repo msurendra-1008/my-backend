@@ -328,11 +328,19 @@ class CheckoutConfirmView(LoginRequiredMixin, APIView):
 
             print(f"[checkout_confirm] AFTER  update — order.id={order.id}  order.order_status={order.order_status!r}  order.payment_status={order.payment_status!r}")
 
-            # Deduct stock
+            # Deduct stock (FIFO from rack stocks, falls back to direct deduction if no racks)
+            from apps.warehouse.utils import deduct_stock as fifo_deduct
+            order_ref = str(order.id)[:20]
             for idata in items_data:
-                ProductVariant.objects.filter(pk=idata["variant"].pk).update(
-                    stock_quantity=idata["variant"].stock_quantity - idata["quantity"]
-                )
+                variant = idata["variant"]
+                qty = idata["quantity"]
+                try:
+                    fifo_deduct(variant, qty, performed_by=request.user, reference=order_ref)
+                except ValueError:
+                    # No rack stock entries — fall back to direct stock deduction
+                    ProductVariant.objects.filter(pk=variant.pk).update(
+                        stock_quantity=variant.stock_quantity - qty
+                    )
 
             # Debit wallet
             if wallet and wallet_amount > Decimal("0"):
