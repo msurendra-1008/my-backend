@@ -125,15 +125,31 @@ def generate_debit_note_pdf(report):
     report.save(update_fields=['debit_note', 'debit_note_generated_at'])
 
 
-def update_product_stock(report, updated_by):
-    """Add accepted_quantity to the first active variant of the product, mark PO completed."""
+def update_product_stock(report, updated_by, rack=None):
+    """
+    Add accepted_quantity to stock.
+    If rack is provided, assigns to that rack and creates StockMovement.
+    Otherwise falls back to direct variant stock_quantity increment.
+    Marks report stock_updated and PO completed.
+    """
     with transaction.atomic():
         po      = report.shipment.purchase_order
         product = po.product
         variant = product.variants.filter(is_active=True).first()
         if variant:
-            variant.stock_quantity += report.accepted_quantity
-            variant.save(update_fields=['stock_quantity'])
+            if rack is not None:
+                from apps.warehouse.utils import assign_stock_to_rack
+                assign_stock_to_rack(
+                    rack=rack,
+                    variant=variant,
+                    quantity=report.accepted_quantity,
+                    performed_by=updated_by,
+                    reference=po.po_number,
+                    notes=f'Inspection stock update for {po.po_number}',
+                )
+            else:
+                variant.stock_quantity += report.accepted_quantity
+                variant.save(update_fields=['stock_quantity'])
         report.stock_updated    = True
         report.stock_updated_at = timezone.now()
         report.stock_updated_by = updated_by
