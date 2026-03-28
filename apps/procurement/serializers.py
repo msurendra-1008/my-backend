@@ -74,9 +74,12 @@ class VendorResponseSerializer(serializers.ModelSerializer):
 # ── PurchaseOrder ─────────────────────────────────────────────────────────────
 
 class PurchaseOrderSerializer(serializers.ModelSerializer):
-    vendor_company = serializers.SerializerMethodField()
-    product_name   = serializers.SerializerMethodField()
-    product_image  = serializers.SerializerMethodField()
+    vendor_company   = serializers.SerializerMethodField()
+    product_name     = serializers.SerializerMethodField()
+    product_image    = serializers.SerializerMethodField()
+    shipment_status  = serializers.SerializerMethodField()
+    has_debit_note   = serializers.SerializerMethodField()
+    debit_note_url   = serializers.SerializerMethodField()
 
     class Meta:
         model  = PurchaseOrder
@@ -86,6 +89,7 @@ class PurchaseOrderSerializer(serializers.ModelSerializer):
             'monthly_breakdown', 'dispatch_date', 'status',
             'vendor_notes', 'admin_notes',
             'generated_at', 'acknowledged_at', 'dispatched_at',
+            'shipment_status', 'has_debit_note', 'debit_note_url',
         ]
 
     def get_vendor_company(self, obj):
@@ -96,6 +100,30 @@ class PurchaseOrderSerializer(serializers.ModelSerializer):
 
     def get_product_image(self, obj):
         return _product_image(obj.product, self.context.get('request'))
+
+    def get_shipment_status(self, obj):
+        try:
+            return obj.shipment.status
+        except Exception:
+            return None
+
+    def get_has_debit_note(self, obj):
+        try:
+            return bool(obj.shipment.report.debit_note)
+        except Exception:
+            return False
+
+    def get_debit_note_url(self, obj):
+        request = self.context.get('request')
+        try:
+            dn = obj.shipment.report.debit_note
+            if dn and request:
+                return request.build_absolute_uri(dn.url)
+            if dn:
+                return dn.url
+        except Exception:
+            pass
+        return None
 
 
 # ── ProcurementRequirement (admin read) ──────────────────────────────────────
