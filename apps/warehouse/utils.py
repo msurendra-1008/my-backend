@@ -48,9 +48,26 @@ def assign_stock_to_rack(rack, variant, quantity, performed_by=None, reference='
     Add quantity to rack for variant.
     Creates/updates RackStock and a StockMovement(inbound).
     Syncs variant.stock_quantity.
+    Raises ValueError if adding would exceed rack.capacity.
     Returns (rack_stock, capacity_warning).
     """
     from .models import RackStock, StockMovement
+
+    # Hard-block: check capacity before writing
+    if rack.capacity > 0:
+        current_total = (
+            RackStock.objects.filter(rack=rack)
+            .aggregate(total=Sum('quantity'))['total'] or 0
+        )
+        new_total = current_total + quantity
+        if new_total > rack.capacity:
+            available = rack.capacity - current_total
+            raise ValueError(
+                f'This rack has a capacity of {rack.capacity} units. '
+                f'Currently has {current_total} units. '
+                f'Cannot add {quantity} more units. '
+                f'Available space: {available} units'
+            )
 
     rack_stock, _ = RackStock.objects.select_for_update().get_or_create(
         rack=rack, variant=variant, defaults={'quantity': 0},
@@ -70,8 +87,8 @@ def assign_stock_to_rack(rack, variant, quantity, performed_by=None, reference='
 
     sync_variant_stock(variant)
 
-    capacity_warning = rack.capacity > 0 and rack.current_stock > rack.capacity
-    return rack_stock, capacity_warning
+    # Always False now — we block at entry instead of warning after the fact
+    return rack_stock, False
 
 
 @transaction.atomic
@@ -122,7 +139,8 @@ def transfer_stock(from_rack, to_rack, variant, quantity, performed_by=None, not
     """
     Transfer quantity from from_rack to to_rack for variant.
     Creates TWO StockMovement records (transfer_out + transfer_in).
-    Raises ValueError if insufficient stock in from_rack.
+    Raises ValueError if insufficient stock in from_rack OR destination
+    rack capacity would be exceeded.
     Returns (transfer, capacity_warning).
     """
     from .models import RackStock, StockMovement, StockTransfer
@@ -135,6 +153,21 @@ def transfer_stock(from_rack, to_rack, variant, quantity, performed_by=None, not
         raise ValueError(
             f'Insufficient stock in {from_rack}: need {quantity}, have {available}.'
         )
+
+    # Check destination rack capacity
+    if to_rack.capacity > 0:
+        dest_total = (
+            RackStock.objects.filter(rack=to_rack)
+            .aggregate(total=Sum('quantity'))['total'] or 0
+        )
+        if dest_total + quantity > to_rack.capacity:
+            available_space = to_rack.capacity - dest_total
+            raise ValueError(
+                f'This rack has a capacity of {to_rack.capacity} units. '
+                f'Currently has {dest_total} units. '
+                f'Cannot add {quantity} more units. '
+                f'Available space: {available_space} units'
+            )
 
     source.quantity -= quantity
     source.save(update_fields=['quantity', 'last_updated'])
@@ -171,5 +204,5 @@ def transfer_stock(from_rack, to_rack, variant, quantity, performed_by=None, not
     # variant stock_quantity stays the same (just moved between racks) but sync anyway
     sync_variant_stock(variant)
 
-    capacity_warning = to_rack.capacity > 0 and to_rack.current_stock > to_rack.capacity
-    return transfer, capacity_warning
+    # Always False — blocked at entry instead of warning after the fact
+    return transfer, False
