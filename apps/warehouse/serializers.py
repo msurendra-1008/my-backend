@@ -2,6 +2,8 @@ from rest_framework import serializers
 
 from .models import Warehouse, Zone, Rack, RackStock, StockMovement, StockTransfer
 
+_PV = __import__('apps.products.models', fromlist=['ProductVariant']).ProductVariant
+
 
 class WarehouseSerializer(serializers.ModelSerializer):
     zone_count = serializers.SerializerMethodField()
@@ -29,18 +31,25 @@ class ZoneSerializer(serializers.ModelSerializer):
 
 
 class RackSerializer(serializers.ModelSerializer):
-    zone_name      = serializers.CharField(source='zone.name', read_only=True)
-    warehouse_name = serializers.CharField(source='zone.warehouse.name', read_only=True)
-    warehouse_id   = serializers.UUIDField(source='zone.warehouse.id', read_only=True)
-    current_stock  = serializers.IntegerField(read_only=True)
+    zone_name           = serializers.CharField(source='zone.name', read_only=True)
+    warehouse_name      = serializers.CharField(source='zone.warehouse.name', read_only=True)
+    warehouse_id        = serializers.UUIDField(source='zone.warehouse.id', read_only=True)
+    current_stock       = serializers.IntegerField(read_only=True)
+    capacity_percentage = serializers.SerializerMethodField()
 
     class Meta:
         model = Rack
         fields = [
             'id', 'zone', 'zone_name', 'warehouse_id', 'warehouse_name',
-            'code', 'capacity', 'is_active', 'current_stock', 'created_at',
+            'code', 'capacity', 'is_active',
+            'current_stock', 'capacity_percentage', 'created_at',
         ]
         read_only_fields = ['id', 'created_at']
+
+    def get_capacity_percentage(self, obj):
+        if obj.capacity == 0:
+            return None
+        return round(obj.current_stock / obj.capacity * 100)
 
 
 class RackStockSerializer(serializers.ModelSerializer):
@@ -127,7 +136,7 @@ class StockTransferSerializer(serializers.ModelSerializer):
 class StockTransferCreateSerializer(serializers.Serializer):
     from_rack = serializers.PrimaryKeyRelatedField(queryset=Rack.objects.filter(is_active=True))
     to_rack   = serializers.PrimaryKeyRelatedField(queryset=Rack.objects.filter(is_active=True))
-    variant   = serializers.PrimaryKeyRelatedField(queryset=__import__('apps.products.models', fromlist=['ProductVariant']).ProductVariant.objects.all())
+    variant   = serializers.PrimaryKeyRelatedField(queryset=_PV.objects.all())
     quantity  = serializers.IntegerField(min_value=1)
     notes     = serializers.CharField(required=False, allow_blank=True, default='')
 
@@ -138,15 +147,24 @@ class StockTransferCreateSerializer(serializers.Serializer):
 
 
 class AssignStockSerializer(serializers.Serializer):
-    rack     = serializers.PrimaryKeyRelatedField(queryset=Rack.objects.filter(is_active=True))
-    variant  = serializers.PrimaryKeyRelatedField(queryset=__import__('apps.products.models', fromlist=['ProductVariant']).ProductVariant.objects.all())
-    quantity = serializers.IntegerField(min_value=1)
-    reference = serializers.CharField(required=False, allow_blank=True, default='')
-    notes    = serializers.CharField(required=False, allow_blank=True, default='')
-
-
-class AdjustStockSerializer(serializers.Serializer):
     rack      = serializers.PrimaryKeyRelatedField(queryset=Rack.objects.filter(is_active=True))
-    variant   = serializers.PrimaryKeyRelatedField(queryset=__import__('apps.products.models', fromlist=['ProductVariant']).ProductVariant.objects.all())
-    new_quantity = serializers.IntegerField(min_value=0)
+    variant   = serializers.PrimaryKeyRelatedField(queryset=_PV.objects.all())
+    quantity  = serializers.IntegerField(min_value=1)
+    reference = serializers.CharField(required=False, allow_blank=True, default='')
     notes     = serializers.CharField(required=False, allow_blank=True, default='')
+
+
+class ManualAdjustSerializer(serializers.Serializer):
+    rack            = serializers.PrimaryKeyRelatedField(queryset=Rack.objects.filter(is_active=True))
+    variant         = serializers.PrimaryKeyRelatedField(queryset=_PV.objects.all())
+    adjustment_type = serializers.ChoiceField(choices=['add', 'remove'])
+    quantity        = serializers.IntegerField(min_value=1)
+    reason          = serializers.CharField(min_length=10)
+
+
+class ProductVariantLiteSerializer(serializers.ModelSerializer):
+    product_name = serializers.CharField(source='product.name', read_only=True)
+
+    class Meta:
+        model = _PV
+        fields = ['id', 'name', 'sku', 'product_name', 'stock_quantity']

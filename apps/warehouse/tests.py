@@ -211,10 +211,12 @@ class StockAPITest(TestCase):
         res = self.client.post('/api/v1/warehouse/stock/adjust/', {
             'rack': str(self.rack.id),
             'variant': str(self.variant.id),
-            'new_quantity': 50,
+            'adjustment_type': 'add',
+            'quantity': 40,
+            'reason': 'Opening stock correction',
         })
         self.assertEqual(res.status_code, 200)
-        self.assertEqual(res.data['quantity'], 50)
+        self.assertEqual(res.data['rack_stock']['quantity'], 50)
 
     def test_transfer_via_api(self):
         auth(self.client, self.admin)

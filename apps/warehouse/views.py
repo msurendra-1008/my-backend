@@ -1,4 +1,5 @@
 from django.db import transaction
+from django.db.models import Q
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -10,7 +11,7 @@ from .serializers import (
     WarehouseSerializer, ZoneSerializer, RackSerializer,
     RackStockSerializer, StockMovementSerializer,
     StockTransferSerializer, StockTransferCreateSerializer,
-    AssignStockSerializer, AdjustStockSerializer,
+    AssignStockSerializer, ManualAdjustSerializer, ProductVariantLiteSerializer,
 )
 from .utils import assign_stock_to_rack, transfer_stock, sync_variant_stock
 
@@ -63,12 +64,13 @@ class RackViewSet(viewsets.ModelViewSet):
 class StockViewSet(viewsets.GenericViewSet):
     """
     Stock-level endpoints:
-    - GET  /stock/           List all RackStock entries
-    - POST /stock/assign/    Assign (inbound) stock to a rack
-    - POST /stock/adjust/    Set a rack's stock to a new absolute quantity
-    - POST /stock/transfer/  Transfer stock between racks
-    - GET  /stock/movements/ List StockMovements
-    - GET  /stock/transfers/ List StockTransfers
+    - GET  /stock/            List all RackStock entries
+    - POST /stock/assign/     Inbound stock to a rack
+    - POST /stock/adjust/     Manual add/remove with reason
+    - POST /stock/transfer/   Transfer between racks
+    - GET  /stock/movements/  List StockMovements
+    - GET  /stock/transfers/  List StockTransfers
+    - GET  /stock/variants/   Search ProductVariants for admin picker
     """
     permission_classes = [IsAdminOrEmployee]
 
@@ -123,35 +125,52 @@ class StockViewSet(viewsets.GenericViewSet):
 
     @action(detail=False, methods=['post'], permission_classes=[IsAdmin])
     def adjust(self, request):
-        ser = AdjustStockSerializer(data=request.data)
+        """
+        Manual stock adjustment (add or remove) with a required reason.
+        Body: { rack, variant, adjustment_type: 'add'|'remove', quantity, reason }
+        """
+        ser = ManualAdjustSerializer(data=request.data)
         ser.is_valid(raise_exception=True)
         d = ser.validated_data
+        rack     = d['rack']
+        variant  = d['variant']
+        qty      = d['quantity']
+        adj_type = d['adjustment_type']
+        reason   = d['reason']
 
         with transaction.atomic():
-            from .models import RackStock, StockMovement
-
             rack_stock, _ = RackStock.objects.select_for_update().get_or_create(
-                rack=d['rack'], variant=d['variant'], defaults={'quantity': 0},
+                rack=rack, variant=variant, defaults={'quantity': 0},
             )
-            old_qty = rack_stock.quantity
-            new_qty = d['new_quantity']
-            diff = new_qty - old_qty
 
-            rack_stock.quantity = new_qty
+            if adj_type == 'remove':
+                if rack_stock.quantity < qty:
+                    return Response(
+                        {'detail': 'Insufficient stock in this rack.'},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                rack_stock.quantity -= qty
+            else:
+                rack_stock.quantity += qty
+
             rack_stock.save(update_fields=['quantity', 'last_updated'])
 
-            if diff != 0:
-                StockMovement.objects.create(
-                    rack=d['rack'],
-                    variant=d['variant'],
-                    movement_type='adjustment',
-                    quantity=abs(diff),
-                    notes=d.get('notes', f'Adjusted from {old_qty} to {new_qty}'),
-                    performed_by=request.user,
-                )
-                sync_variant_stock(d['variant'])
+            StockMovement.objects.create(
+                rack=rack,
+                variant=variant,
+                movement_type='adjustment',
+                quantity=qty,
+                reference='manual-adjust',
+                notes=reason,
+                performed_by=request.user,
+            )
+            sync_variant_stock(variant)
+            variant.refresh_from_db()
 
-        return Response(RackStockSerializer(rack_stock, context={'request': request}).data)
+        return Response({
+            'rack_stock': RackStockSerializer(rack_stock, context={'request': request}).data,
+            'variant_stock_quantity': variant.stock_quantity,
+        })
 
     @action(detail=False, methods=['post'], permission_classes=[IsAdmin])
     def transfer(self, request):
@@ -184,11 +203,11 @@ class StockViewSet(viewsets.GenericViewSet):
         qs = StockMovement.objects.select_related(
             'rack__zone__warehouse', 'variant__product', 'performed_by',
         ).all()
-        warehouse_id   = request.query_params.get('warehouse')
-        rack_id        = request.query_params.get('rack')
-        variant_id     = request.query_params.get('variant')
-        movement_type  = request.query_params.get('movement_type')
-        search         = request.query_params.get('search', '').strip()
+        warehouse_id  = request.query_params.get('warehouse')
+        rack_id       = request.query_params.get('rack')
+        variant_id    = request.query_params.get('variant')
+        movement_type = request.query_params.get('movement_type')
+        search        = request.query_params.get('search', '').strip()
 
         if warehouse_id:
             qs = qs.filter(rack__zone__warehouse_id=warehouse_id)
@@ -211,4 +230,17 @@ class StockViewSet(viewsets.GenericViewSet):
             'variant__product', 'initiated_by',
         ).all()
         serializer = StockTransferSerializer(qs[:200], many=True)
+        return Response(serializer.data)
+
+    @action(detail=False, methods=['get'], url_path='variants')
+    def variants(self, request):
+        """Search ProductVariants for the admin stock-entry picker."""
+        from apps.products.models import ProductVariant
+        qs = ProductVariant.objects.select_related('product').filter(is_active=True)
+        search = request.query_params.get('search', '').strip()
+        if search:
+            qs = qs.filter(
+                Q(product__name__icontains=search) | Q(sku__icontains=search)
+            )
+        serializer = ProductVariantLiteSerializer(qs[:50], many=True)
         return Response(serializer.data)
