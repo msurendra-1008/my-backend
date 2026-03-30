@@ -18,6 +18,25 @@ def sync_variant_stock(variant):
     variant.save(update_fields=['stock_quantity'])
 
 
+def _check_rack_capacity(rack, quantity):
+    """
+    Raise ValueError if adding `quantity` to `rack` would exceed its capacity.
+    No-op when rack.capacity == 0 (unlimited).
+    """
+    from .models import RackStock
+    if rack.capacity == 0:
+        return
+    current_total = RackStock.objects.filter(rack=rack).aggregate(total=Sum('quantity'))['total'] or 0
+    new_total = current_total + quantity
+    if new_total > rack.capacity:
+        raise ValueError(
+            f'This rack has a capacity of {rack.capacity} units. '
+            f'Currently has {current_total} units. '
+            f'Cannot add {quantity} more units. '
+            f'Available space: {rack.capacity - current_total} units'
+        )
+
+
 def find_suggested_rack(variant, warehouse=None):
     """
     Return the rack that already holds this variant (most stock first).
@@ -46,11 +65,15 @@ def find_suggested_rack(variant, warehouse=None):
 def assign_stock_to_rack(rack, variant, quantity, performed_by=None, reference='', notes=''):
     """
     Add quantity to rack for variant.
+    Raises ValueError if adding quantity would exceed rack capacity.
     Creates/updates RackStock and a StockMovement(inbound).
     Syncs variant.stock_quantity.
-    Returns (rack_stock, capacity_warning).
+    Returns (rack_stock, False).
     """
     from .models import RackStock, StockMovement
+
+    # Hard capacity check BEFORE adding stock
+    _check_rack_capacity(rack, quantity)
 
     rack_stock, _ = RackStock.objects.select_for_update().get_or_create(
         rack=rack, variant=variant, defaults={'quantity': 0},
@@ -69,9 +92,7 @@ def assign_stock_to_rack(rack, variant, quantity, performed_by=None, reference='
     )
 
     sync_variant_stock(variant)
-
-    capacity_warning = rack.capacity > 0 and rack.current_stock > rack.capacity
-    return rack_stock, capacity_warning
+    return rack_stock, False
 
 
 @transaction.atomic
@@ -121,20 +142,23 @@ def deduct_stock(variant, quantity, performed_by=None, reference='', notes=''):
 def transfer_stock(from_rack, to_rack, variant, quantity, performed_by=None, notes=''):
     """
     Transfer quantity from from_rack to to_rack for variant.
+    Raises ValueError if insufficient stock in from_rack or destination would exceed capacity.
     Creates TWO StockMovement records (transfer_out + transfer_in).
-    Raises ValueError if insufficient stock in from_rack.
-    Returns (transfer, capacity_warning).
+    Returns (transfer, False).
     """
     from .models import RackStock, StockMovement, StockTransfer
     from django.utils import timezone
 
-    # Lock source
+    # Lock source and check availability
     source = RackStock.objects.select_for_update().filter(rack=from_rack, variant=variant).first()
     if not source or source.quantity < quantity:
         available = source.quantity if source else 0
         raise ValueError(
             f'Insufficient stock in {from_rack}: need {quantity}, have {available}.'
         )
+
+    # Hard capacity check for destination BEFORE adding
+    _check_rack_capacity(to_rack, quantity)
 
     source.quantity -= quantity
     source.save(update_fields=['quantity', 'last_updated'])
@@ -170,6 +194,4 @@ def transfer_stock(from_rack, to_rack, variant, quantity, performed_by=None, not
 
     # variant stock_quantity stays the same (just moved between racks) but sync anyway
     sync_variant_stock(variant)
-
-    capacity_warning = to_rack.capacity > 0 and to_rack.current_stock > to_rack.capacity
-    return transfer, capacity_warning
+    return transfer, False
