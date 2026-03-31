@@ -1,5 +1,5 @@
 from django.db import transaction
-from django.db.models import Q
+from django.db.models import Q, Sum
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -99,7 +99,8 @@ class StockViewSet(viewsets.GenericViewSet):
             qs = qs.filter(variant__product__name__icontains=search)
 
         serializer = RackStockSerializer(qs, many=True, context={'request': request})
-        return Response(serializer.data)
+        data = serializer.data
+        return Response({'count': len(data), 'results': data, 'next': None, 'previous': None})
 
     @action(detail=False, methods=['post'], permission_classes=[IsAdmin])
     def assign(self, request):
@@ -107,14 +108,18 @@ class StockViewSet(viewsets.GenericViewSet):
         ser.is_valid(raise_exception=True)
         d = ser.validated_data
 
-        rack_stock, capacity_warning = assign_stock_to_rack(
-            rack=d['rack'],
-            variant=d['variant'],
-            quantity=d['quantity'],
-            performed_by=request.user,
-            reference=d.get('reference', ''),
-            notes=d.get('notes', ''),
-        )
+        try:
+            rack_stock, capacity_warning = assign_stock_to_rack(
+                rack=d['rack'],
+                variant=d['variant'],
+                quantity=d['quantity'],
+                performed_by=request.user,
+                reference=d.get('reference', ''),
+                notes=d.get('notes', ''),
+            )
+        except ValueError as exc:
+            return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
         return Response(
             {
                 'rack_stock': RackStockSerializer(rack_stock, context={'request': request}).data,
@@ -151,6 +156,26 @@ class StockViewSet(viewsets.GenericViewSet):
                     )
                 rack_stock.quantity -= qty
             else:
+                # add — enforce capacity hard limit
+                if rack.capacity > 0:
+                    current_total = (
+                        RackStock.objects.filter(rack=rack)
+                        .aggregate(total=Sum('quantity'))['total'] or 0
+                    )
+                    new_total = current_total + qty
+                    if new_total > rack.capacity:
+                        available = rack.capacity - current_total
+                        return Response(
+                            {
+                                'error': (
+                                    f'This rack has a capacity of {rack.capacity} units. '
+                                    f'Currently has {current_total} units. '
+                                    f'Cannot add {qty} more units. '
+                                    f'Available space: {available} units'
+                                )
+                            },
+                            status=status.HTTP_400_BAD_REQUEST,
+                        )
                 rack_stock.quantity += qty
 
             rack_stock.save(update_fields=['quantity', 'last_updated'])
@@ -178,10 +203,32 @@ class StockViewSet(viewsets.GenericViewSet):
         ser.is_valid(raise_exception=True)
         d = ser.validated_data
 
+        # Hard-block if destination rack would be over capacity
+        to_rack = d['to_rack']
+        if to_rack.capacity > 0:
+            current_total = (
+                RackStock.objects.filter(rack=to_rack)
+                .aggregate(total=Sum('quantity'))['total'] or 0
+            )
+            new_total = current_total + d['quantity']
+            if new_total > to_rack.capacity:
+                available = to_rack.capacity - current_total
+                return Response(
+                    {
+                        'error': (
+                            f'This rack has a capacity of {to_rack.capacity} units. '
+                            f'Currently has {current_total} units. '
+                            f'Cannot add {d["quantity"]} more units. '
+                            f'Available space: {available} units'
+                        )
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
         try:
             transfer_obj, capacity_warning = transfer_stock(
                 from_rack=d['from_rack'],
-                to_rack=d['to_rack'],
+                to_rack=to_rack,
                 variant=d['variant'],
                 quantity=d['quantity'],
                 performed_by=request.user,
@@ -221,7 +268,8 @@ class StockViewSet(viewsets.GenericViewSet):
             qs = qs.filter(variant__product__name__icontains=search)
 
         serializer = StockMovementSerializer(qs[:200], many=True)
-        return Response(serializer.data)
+        data = serializer.data
+        return Response({'count': len(data), 'results': data, 'next': None, 'previous': None})
 
     @action(detail=False, methods=['get'], url_path='transfers')
     def transfers(self, request):
@@ -230,7 +278,8 @@ class StockViewSet(viewsets.GenericViewSet):
             'variant__product', 'initiated_by',
         ).all()
         serializer = StockTransferSerializer(qs[:200], many=True)
-        return Response(serializer.data)
+        data = serializer.data
+        return Response({'count': len(data), 'results': data, 'next': None, 'previous': None})
 
     @action(detail=False, methods=['get'], url_path='variants')
     def variants(self, request):
