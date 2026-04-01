@@ -90,6 +90,7 @@ class PurchaseOrder(models.Model):
     po_number        = models.CharField(max_length=30, unique=True)
     requirement      = models.OneToOneField(
         ProcurementRequirement, on_delete=models.PROTECT, related_name='purchase_order',
+        null=True, blank=True,
     )
     vendor           = models.ForeignKey(
         VendorProfile, on_delete=models.PROTECT, related_name='purchase_orders',
