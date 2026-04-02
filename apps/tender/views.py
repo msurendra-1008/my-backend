@@ -7,7 +7,7 @@ from django.db import transaction
 
 from apps.authentication.permissions import (
     IsAdmin, IsAdminOrEmployee, IsApprovedVendor)
-from .models import Tender, TenderItem, VendorBid, VendorBidItem
+from .models import Tender, TenderItem, VendorBid, VendorBidItem, NegotiationLog
 from .serializers import (
     TenderListSerializer, TenderDetailSerializer,
     TenderDetailVendorSerializer, TenderCreateSerializer,
@@ -115,6 +115,8 @@ class TenderViewSet(viewsets.ModelViewSet):
         bid.negotiation_notes = notes
         bid.status            = 'under_negotiation'
         bid.save()
+        NegotiationLog.objects.create(
+            bid=bid, actor=request.user, actor_role='admin', message=notes)
         return Response(VendorBidSerializer(
             bid, context={'request': request}).data)
 
@@ -194,6 +196,11 @@ class VendorTenderViewSet(viewsets.ViewSet):
             )
             for item_data in serializer.validated_data['items']:
                 VendorBidItem.objects.create(bid=bid, **item_data)
+            overall_notes = serializer.validated_data.get('overall_notes', '').strip()
+            if overall_notes:
+                NegotiationLog.objects.create(
+                    bid=bid, actor=request.user,
+                    actor_role='vendor', message=overall_notes)
 
         return Response(
             VendorBidSerializer(bid, context={'request': request}).data,
@@ -226,6 +233,11 @@ class VendorTenderViewSet(viewsets.ViewSet):
             bid.items.all().delete()
             for item_data in serializer.validated_data['items']:
                 VendorBidItem.objects.create(bid=bid, **item_data)
+            vendor_note = serializer.validated_data.get('overall_notes', '').strip()
+            if vendor_note:
+                NegotiationLog.objects.create(
+                    bid=bid, actor=request.user,
+                    actor_role='vendor', message=vendor_note)
 
         return Response(VendorBidSerializer(bid, context={'request': request}).data)
 
