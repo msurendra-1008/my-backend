@@ -252,3 +252,35 @@ class VendorTenderViewSet(viewsets.ViewSet):
         if not deleted:
             return Response({'error': 'No withdrawable bid found.'}, status=404)
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+    @action(detail=True, methods=['post'], url_path='comment')
+    def add_comment(self, request, pk=None):
+        try:
+            tender = Tender.objects.get(pk=pk)
+        except Tender.DoesNotExist:
+            return Response({'error': 'Not found.'}, status=404)
+
+        vendor = request.user.vendor_profile
+        try:
+            bid = tender.bids.get(vendor=vendor)
+        except VendorBid.DoesNotExist:
+            return Response({'error': 'No bid found.'}, status=404)
+
+        if bid.status != 'under_negotiation':
+            return Response(
+                {'error': 'Can only reply when admin has '
+                          'requested information.'},
+                status=400)
+
+        message = request.data.get('message', '').strip()
+        if not message:
+            return Response({'error': 'message is required.'}, status=400)
+
+        NegotiationLog.objects.create(
+            bid=bid, actor=request.user,
+            actor_role='vendor', message=message)
+
+        bid.status = 'bid_revised'
+        bid.save()
+
+        return Response({'message': 'Reply sent.'}, status=201)
