@@ -227,21 +227,18 @@ class AwardTenderSerializer(serializers.Serializer):
         tender = self.context['tender']
         tender_item_ids = set(
             str(i.id) for i in tender.items.all())
-        seen = set()
+        covered = set()
         for entry in value:
             tid    = str(entry.get('tender_item_id', ''))
             bid_id = str(entry.get('vendor_bid_id', ''))
-            if tid in seen:
-                raise serializers.ValidationError(
-                    f"Duplicate tender_item_id: {tid}")
-            seen.add(tid)
             if tid not in tender_item_ids:
                 raise serializers.ValidationError(
                     f"tender_item {tid} does not belong to this tender.")
             if not tender.bids.filter(id=bid_id).exists():
                 raise serializers.ValidationError(
                     f"vendor_bid {bid_id} does not belong to this tender.")
-        if seen != tender_item_ids:
+            covered.add(tid)
+        if covered != tender_item_ids:
             raise serializers.ValidationError(
                 "All tender items must be awarded.")
         return value
