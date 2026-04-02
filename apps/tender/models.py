@@ -98,3 +98,26 @@ class VendorBidItem(models.Model):
 
     class Meta:
         unique_together = ('bid', 'tender_item')
+
+
+class NegotiationLog(models.Model):
+    ACTOR_CHOICES = [
+        ('admin',  'Admin'),
+        ('vendor', 'Vendor'),
+    ]
+    id         = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    bid        = models.ForeignKey(
+                   VendorBid, on_delete=models.CASCADE,
+                   related_name='negotiation_logs')
+    actor      = models.ForeignKey(
+                   settings.AUTH_USER_MODEL,
+                   on_delete=models.SET_NULL, null=True)
+    actor_role = models.CharField(max_length=10, choices=ACTOR_CHOICES)
+    message    = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['created_at']
+
+    def __str__(self):
+        return f"{self.actor_role}: {self.message[:50]}"

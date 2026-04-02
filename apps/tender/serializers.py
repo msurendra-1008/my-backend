@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Tender, TenderItem, VendorBid, VendorBidItem
+from .models import Tender, TenderItem, VendorBid, VendorBidItem, NegotiationLog
 from apps.products.models import Product
 from apps.vendors.models import VendorProfile
 from django.utils import timezone
@@ -112,15 +112,34 @@ class VendorBidWriteSerializer(serializers.Serializer):
         return value
 
 
+class NegotiationLogSerializer(serializers.ModelSerializer):
+    actor_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model  = NegotiationLog
+        fields = ['id', 'actor_role', 'actor_name', 'message', 'created_at']
+
+    def get_actor_name(self, obj):
+        if not obj.actor:
+            return 'Unknown'
+        if obj.actor_role == 'admin':
+            return obj.actor.get_full_name() or obj.actor.email or 'Admin'
+        vendor_profile = getattr(obj.actor, 'vendor_profile', None)
+        return (vendor_profile.company_name if vendor_profile
+                else obj.actor.get_full_name() or obj.actor.email or 'Vendor')
+
+
 class VendorBidSerializer(serializers.ModelSerializer):
-    items       = VendorBidItemSerializer(many=True, read_only=True)
-    vendor_name = serializers.CharField(
-        source='vendor.company_name', read_only=True)
+    items              = VendorBidItemSerializer(many=True, read_only=True)
+    vendor_name        = serializers.CharField(
+                           source='vendor.company_name', read_only=True)
+    negotiation_logs   = NegotiationLogSerializer(many=True, read_only=True)
 
     class Meta:
         model  = VendorBid
         fields = ['id', 'vendor', 'vendor_name', 'status',
                   'overall_notes', 'negotiation_notes',
+                  'negotiation_logs',
                   'items', 'submitted_at', 'updated_at', 'update_count']
 
 
@@ -208,21 +227,18 @@ class AwardTenderSerializer(serializers.Serializer):
         tender = self.context['tender']
         tender_item_ids = set(
             str(i.id) for i in tender.items.all())
-        seen = set()
+        covered = set()
         for entry in value:
             tid    = str(entry.get('tender_item_id', ''))
             bid_id = str(entry.get('vendor_bid_id', ''))
-            if tid in seen:
-                raise serializers.ValidationError(
-                    f"Duplicate tender_item_id: {tid}")
-            seen.add(tid)
             if tid not in tender_item_ids:
                 raise serializers.ValidationError(
                     f"tender_item {tid} does not belong to this tender.")
             if not tender.bids.filter(id=bid_id).exists():
                 raise serializers.ValidationError(
                     f"vendor_bid {bid_id} does not belong to this tender.")
-        if seen != tender_item_ids:
+            covered.add(tid)
+        if covered != tender_item_ids:
             raise serializers.ValidationError(
                 "All tender items must be awarded.")
         return value
