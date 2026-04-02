@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import Tender, TenderItem, VendorBid, VendorBidItem
+from .models import Tender, TenderItem, VendorBid, VendorBidItem, NegotiationLog
 
 
 class TenderItemInline(admin.TabularInline):
@@ -32,3 +32,19 @@ class TenderAdmin(admin.ModelAdmin):
 
     def get_bids(self, obj): return obj.bids.count()
     get_bids.short_description = 'Bids'
+
+
+@admin.register(NegotiationLog)
+class NegotiationLogAdmin(admin.ModelAdmin):
+    list_display    = ('get_tender', 'actor_role', 'get_vendor',
+                       'message', 'created_at')
+    list_filter     = ('actor_role',)
+    readonly_fields = ('bid', 'actor', 'actor_role', 'message', 'created_at')
+
+    def get_tender(self, obj):
+        return obj.bid.tender.tender_number
+    get_tender.short_description = 'Tender'
+
+    def get_vendor(self, obj):
+        return obj.bid.vendor.company_name
+    get_vendor.short_description = 'Vendor'
