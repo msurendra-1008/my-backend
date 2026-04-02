@@ -154,8 +154,16 @@ class VendorTenderViewSet(viewsets.ViewSet):
         return Response(TenderDetailVendorSerializer(
             tender, context={'request': request}).data)
 
-    @action(detail=True, methods=['post'], url_path='bid')
-    def submit_bid(self, request, pk=None):
+    @action(detail=True, methods=['post', 'patch', 'delete'],
+            url_path='bid', url_name='bid')
+    def bid(self, request, pk=None):
+        if request.method == 'POST':
+            return self._submit_bid(request, pk)
+        if request.method == 'PATCH':
+            return self._update_bid(request, pk)
+        return self._withdraw_bid(request, pk)
+
+    def _submit_bid(self, request, pk):
         try:
             tender = Tender.objects.get(pk=pk, status='open')
         except Tender.DoesNotExist:
@@ -168,9 +176,8 @@ class VendorTenderViewSet(viewsets.ViewSet):
             data=request.data, context={'request': request})
         serializer.is_valid(raise_exception=True)
 
-        tender_item_ids = set(
-            str(i.id) for i in tender.items.all())
-        submitted_ids = set(
+        tender_item_ids = set(str(i.id) for i in tender.items.all())
+        submitted_ids   = set(
             str(i['tender_item'].id)
             for i in serializer.validated_data['items'])
         if tender_item_ids != submitted_ids:
@@ -182,19 +189,17 @@ class VendorTenderViewSet(viewsets.ViewSet):
             bid = VendorBid.objects.create(
                 tender        = tender,
                 vendor        = vendor,
-                overall_notes = serializer.validated_data.get(
-                    'overall_notes', ''),
-                status        = 'bid_submitted'
+                overall_notes = serializer.validated_data.get('overall_notes', ''),
+                status        = 'bid_submitted',
             )
             for item_data in serializer.validated_data['items']:
                 VendorBidItem.objects.create(bid=bid, **item_data)
 
-        return Response(VendorBidSerializer(
-            bid, context={'request': request}).data,
+        return Response(
+            VendorBidSerializer(bid, context={'request': request}).data,
             status=status.HTTP_201_CREATED)
 
-    @action(detail=True, methods=['patch'], url_path='bid')
-    def update_bid(self, request, pk=None):
+    def _update_bid(self, request, pk):
         try:
             tender = Tender.objects.get(pk=pk, status='open')
         except Tender.DoesNotExist:
@@ -206,8 +211,7 @@ class VendorTenderViewSet(viewsets.ViewSet):
             return Response({'error': 'No bid found.'}, status=404)
         if bid.status not in ('bid_submitted', 'under_negotiation'):
             return Response(
-                {'error': 'Bid cannot be updated at this stage.'},
-                status=400)
+                {'error': 'Bid cannot be updated at this stage.'}, status=400)
 
         serializer = VendorBidWriteSerializer(
             data=request.data, context={'request': request})
@@ -223,19 +227,16 @@ class VendorTenderViewSet(viewsets.ViewSet):
             for item_data in serializer.validated_data['items']:
                 VendorBidItem.objects.create(bid=bid, **item_data)
 
-        return Response(VendorBidSerializer(
-            bid, context={'request': request}).data)
+        return Response(VendorBidSerializer(bid, context={'request': request}).data)
 
-    @action(detail=True, methods=['delete'], url_path='bid')
-    def withdraw_bid(self, request, pk=None):
+    def _withdraw_bid(self, request, pk):
         try:
             tender = Tender.objects.get(pk=pk, status='open')
         except Tender.DoesNotExist:
             return Response({'error': 'Tender not open.'}, status=400)
-        vendor = request.user.vendor_profile
+        vendor   = request.user.vendor_profile
         deleted, _ = tender.bids.filter(
             vendor=vendor, status='bid_submitted').delete()
         if not deleted:
-            return Response(
-                {'error': 'No withdrawable bid found.'}, status=404)
+            return Response({'error': 'No withdrawable bid found.'}, status=404)
         return Response(status=status.HTTP_204_NO_CONTENT)

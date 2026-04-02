@@ -12,10 +12,9 @@ from rest_framework.test import APIClient
 class TenderTests(TestCase):
     def setUp(self):
         self.admin = User.objects.create_superuser(
-            mobile='9000000001', password='pass', role='admin')
+            email='admin@test.com', password='pass', role='admin')
         self.vendor_user = User.objects.create_user(
-            mobile='9000000002', password='pass', role='vendor',
-            name='Vendor One')
+            email='vendor@test.com', password='pass', role='vendor')
         self.vendor = VendorProfile.objects.create(
             user=self.vendor_user, company_name='Vendor Co',
             gst_number='GST001', contact_name='Test',
