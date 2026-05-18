@@ -9,15 +9,18 @@ __pycache__/
 dist/
 build/
 .eggs/
-
+.env.example
 # Virtual Environment
 venv/
 env/
 .venv/
 .env/
+/env
 
+note.md
 # Environment variables
 .env
+.env.example
 
 # Django
 *.log
