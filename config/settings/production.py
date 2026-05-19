@@ -12,6 +12,9 @@ DATABASES = {
 }
 
 CORS_ALLOWED_ORIGINS = os.environ.get("CORS_ALLOWED_ORIGINS", "").split(",")
+CSRF_TRUSTED_ORIGINS = [
+    "https://your-frontend.vercel.app",
+]
 
 CORS_ALLOW_CREDENTIALS = True
 
