@@ -26,6 +26,8 @@ class CommissionSettingsSerializer(serializers.ModelSerializer):
 
 class ProductCommissionRuleSerializer(serializers.ModelSerializer):
     product_name = serializers.CharField(source='product.name', read_only=True)
+    product_mrp  = serializers.DecimalField(
+        source='product.mrp', max_digits=12, decimal_places=2, read_only=True)
 
     class Meta:
         model = ProductCommissionRule
@@ -33,6 +35,7 @@ class ProductCommissionRuleSerializer(serializers.ModelSerializer):
             'id',
             'product',
             'product_name',
+            'product_mrp',
             'is_active',
             'network_commission_pct',
             'team_commission_pct',
@@ -47,7 +50,7 @@ class ProductCommissionRuleSerializer(serializers.ModelSerializer):
             'created_at',
             'updated_at',
         ]
-        read_only_fields = ['id', 'product_name', 'created_by', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'product_name', 'product_mrp', 'created_by', 'created_at', 'updated_at']
 
 
 class CommissionEntrySerializer(serializers.ModelSerializer):
