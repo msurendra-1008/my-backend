@@ -8,7 +8,7 @@ from .views import (
 )
 
 router = DefaultRouter()
-router.register('rules',    ProductCommissionRuleViewSet, basename='commission-rules')
+router.register('product-rules', ProductCommissionRuleViewSet, basename='commission-rules')
 router.register('breakups', CommissionBreakupViewSet,     basename='commission-breakups')
 router.register('pending',  PendingCommissionViewSet,     basename='pending-commissions')
 
