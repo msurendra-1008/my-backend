@@ -54,10 +54,16 @@ class ProductCommissionRuleSerializer(serializers.ModelSerializer):
 
 
 class CommissionEntrySerializer(serializers.ModelSerializer):
+    return_window_expires = serializers.DateTimeField(
+        source='breakup.return_window_expires', read_only=True)
+    order_number = serializers.SerializerMethodField()
+
     class Meta:
         model = CommissionEntry
         fields = [
             'id',
+            'return_window_expires',
+            'order_number',
             'recipient',
             'recipient_upa_id',
             'recipient_name',
@@ -74,6 +80,12 @@ class CommissionEntrySerializer(serializers.ModelSerializer):
             'updated_at',
         ]
         read_only_fields = fields
+
+    def get_order_number(self, obj):
+        try:
+            return obj.breakup.order_item.order.order_number
+        except Exception:
+            return ''
 
 
 class CommissionBreakupSerializer(serializers.ModelSerializer):
