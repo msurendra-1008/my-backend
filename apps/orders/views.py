@@ -374,6 +374,14 @@ class CheckoutConfirmView(LoginRequiredMixin, APIView):
             # Clear cart
             cart.items.all().delete()
 
+        # Commission breakups (outside atomic block — failure here should not roll back the order)
+        try:
+            from apps.commissions.utils import create_commission_breakup
+            for item in order.items.select_related('variant__product').all():
+                create_commission_breakup(item)
+        except Exception:
+            pass  # Commission errors must never fail the order
+
         return Response(OrderDetailSerializer(order).data, status=status.HTTP_201_CREATED)
 
 
@@ -465,5 +473,25 @@ class AdminOrderViewSet(LoginRequiredMixin, viewsets.ModelViewSet):
                 items_qs.filter(delivered_at__isnull=False).update(status=new_order_status)
             else:
                 items_qs.update(status=new_order_status)
+
+        if new_order_status == 'delivered':
+            try:
+                from apps.commissions.models import CommissionBreakup
+                from apps.returns.models import ReturnSettings
+                from datetime import timedelta
+                from django.utils import timezone
+                ret_settings = ReturnSettings.get()
+                window_days = ret_settings.return_window_days
+                for item in order.items.exclude(status__in=RETURN_EXCHANGE_STATUSES):
+                    try:
+                        breakup = item.commission_breakup
+                        if breakup.return_window_expires is None:
+                            delivered_time = item.delivered_at or timezone.now()
+                            breakup.return_window_expires = delivered_time + timedelta(days=window_days)
+                            breakup.save()
+                    except CommissionBreakup.DoesNotExist:
+                        pass
+            except Exception:
+                pass
 
         return Response(OrderDetailSerializer(order).data)
