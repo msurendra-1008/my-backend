@@ -99,9 +99,10 @@ class CommissionEntry(BaseModel):
         ('team_downline',  'Team (downline)'),
     ]
     STATUS_CHOICES = [
-        ('credited', 'Credited to wallet'),
-        ('pending',  'Pending — user inactive'),
-        ('vacant',   'Vacant leg — skipped'),
+        ('pending_window', 'Pending return window'),
+        ('credited',       'Credited to wallet'),
+        ('pending',        'Pending — user inactive'),
+        ('vacant',         'Vacant leg — skipped'),
     ]
     LEG_CHOICES = [
         ('left', 'Left'), ('middle', 'Middle'), ('right', 'Right'),
@@ -120,7 +121,7 @@ class CommissionEntry(BaseModel):
     leg_position       = models.CharField(max_length=6, choices=LEG_CHOICES, blank=True)
     amount             = models.DecimalField(max_digits=12, decimal_places=2)
     percentage_applied = models.DecimalField(max_digits=6, decimal_places=2)
-    status             = models.CharField(max_length=8, choices=STATUS_CHOICES)
+    status             = models.CharField(max_length=14, choices=STATUS_CHOICES)
     credited_at        = models.DateTimeField(null=True, blank=True)
     wallet_transaction = models.ForeignKey(
         'app_wallet.WalletTransaction', on_delete=models.SET_NULL,
