@@ -404,14 +404,10 @@ class ProcessCommissionBreakupTest(TestCase):
 
     def test_process_credits_active_users(self):
         breakup = create_commission_breakup(self.item)
-        # All upline entries for active_parent should be in 'credited' status already
-        # Let's manually set one to 'pending' to simulate, then process
         entry = breakup.entries.filter(entry_type='network_upline').first()
         self.assertIsNotNone(entry)
-
-        # Reset to pending to test process
-        entry.status = 'pending'
-        entry.save()
+        # Active user → created as 'pending_window'; process should credit it
+        self.assertEqual(entry.status, 'pending_window')
 
         process_commission_breakup(breakup)
         entry.refresh_from_db()
@@ -422,9 +418,8 @@ class ProcessCommissionBreakupTest(TestCase):
         entry = breakup.entries.filter(entry_type='network_upline').first()
         wallet = self.active_parent.wallet
         initial_balance = wallet.balance
-
-        entry.status = 'pending'
-        entry.save()
+        # Entry starts as 'pending_window' — process_commission_breakup should credit it
+        self.assertEqual(entry.status, 'pending_window')
 
         process_commission_breakup(breakup)
         wallet.refresh_from_db()
@@ -445,8 +440,8 @@ class ProcessCommissionBreakupTest(TestCase):
 
     def test_process_breakup_status_completed(self):
         breakup = create_commission_breakup(self.item)
-        # Set all non-vacant entries to 'pending'
-        breakup.entries.filter(status='credited').update(status='pending')
+        # Active-user entries are created as 'pending_window'; process them all
+        self.assertTrue(breakup.entries.filter(status='pending_window').exists())
         process_commission_breakup(breakup)
         breakup.refresh_from_db()
         self.assertIn(breakup.status, ['completed', 'partial'])
@@ -465,8 +460,8 @@ class ProcessCommissionBreakupTest(TestCase):
     def test_process_creates_wallet_transaction(self):
         breakup = create_commission_breakup(self.item)
         entry = breakup.entries.filter(entry_type='network_upline').first()
-        entry.status = 'pending'
-        entry.save()
+        # Entry starts as 'pending_window' — process should credit and attach transaction
+        self.assertEqual(entry.status, 'pending_window')
 
         process_commission_breakup(breakup)
         entry.refresh_from_db()
@@ -523,7 +518,7 @@ class CreditPendingEntryTest(TestCase):
 
     def test_credit_non_pending_raises_value_error(self):
         entry = self.breakup.entries.filter(entry_type='network_upline').first()
-        # entry.status is 'credited' (active user) — not 'pending'
+        # Only 'pending' entries can be manually credited; set to 'credited' to test rejection
         entry.status = 'credited'
         entry.save()
         with self.assertRaises(ValueError):

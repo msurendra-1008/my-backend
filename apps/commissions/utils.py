@@ -157,7 +157,7 @@ def process_commission_breakup(breakup, processed_by=None):
     from apps.commissions.models import CommissionEntry
 
     with transaction.atomic():
-        for entry in breakup.entries.filter(status__in=['credited', 'pending']):
+        for entry in breakup.entries.filter(status__in=['pending_window', 'pending']):
             if not entry.recipient or not entry.recipient.is_active:
                 entry.status = 'pending'
                 entry.save()
