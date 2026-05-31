@@ -78,7 +78,7 @@ def calculate_commission_entries(order_item):
             'leg_position':       '',
             'amount':             amount,
             'percentage_applied': pct,
-            'status':             'credited' if parent_user.is_active else 'pending',
+            'status':             'pending_window' if parent_user.is_active else 'pending',
         })
 
     # --- DOWNLINE (buyer's direct legs) ---
@@ -112,7 +112,7 @@ def calculate_commission_entries(order_item):
                 'leg_position':       leg_name,
                 'amount':             amount,
                 'percentage_applied': pct,
-                'status':             'credited' if child_user.is_active else 'pending',
+                'status':             'pending_window' if child_user.is_active else 'pending',
             })
         else:
             entries.append({
