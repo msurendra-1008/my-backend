@@ -116,6 +116,14 @@ class Order(BaseModel):
     # Shipping
     tracking_number = models.CharField(max_length=100, blank=True)
 
+    # Satisfied
+    is_satisfied = models.BooleanField(default=False)
+    satisfied_at = models.DateTimeField(null=True, blank=True)
+    satisfied_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='satisfied_orders'
+    )
+
     class Meta:
         ordering = ["-created_at"]
 
@@ -161,8 +169,10 @@ class OrderItem(BaseModel):
     status       = models.CharField(
         max_length=30, choices=ORDER_ITEM_STATUS, default="pending"
     )
-    delivered_at           = models.DateTimeField(null=True, blank=True)
-    return_rejection_count = models.PositiveIntegerField(default=0)
+    delivered_at                 = models.DateTimeField(null=True, blank=True)
+    return_rejection_count       = models.PositiveIntegerField(default=0)
+    return_window_blocked        = models.BooleanField(default=False)
+    return_window_blocked_reason = models.CharField(max_length=50, blank=True)
 
     class Meta:
         ordering = ["created_at"]

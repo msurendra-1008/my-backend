@@ -122,7 +122,7 @@ class OrderItemSerializer(serializers.ModelSerializer):
             "mrp", "upa_price", "quantity", "line_total",
             "status", "delivered_at", "variant_id", "product_slug",
             "return_rejection_count", "return_status", "return_admin_notes",
-            "commission_breakup",
+            "return_window_blocked", "commission_breakup",
         ]
 
     def get_return_status(self, obj):
@@ -191,6 +191,7 @@ class OrderDetailSerializer(serializers.ModelSerializer):
             "address_name", "address_phone", "address_line",
             "address_city", "address_state", "address_pincode",
             "tracking_number",
+            "is_satisfied", "satisfied_at",
             "customer_name", "customer_mobile",
             "items", "created_at", "updated_at",
         ]
