@@ -374,13 +374,16 @@ class CheckoutConfirmView(LoginRequiredMixin, APIView):
             # Clear cart
             cart.items.all().delete()
 
-        # Commission breakups (outside atomic block — failure here should not roll back the order)
-        try:
+        # Commission breakups (outside atomic block — failure must never roll back the order)
+        if order.user:
+            import logging
             from apps.commissions.utils import create_commission_breakup
+            _logger = logging.getLogger(__name__)
             for item in order.items.select_related('variant__product').all():
-                create_commission_breakup(item)
-        except Exception:
-            pass  # Commission errors must never fail the order
+                try:
+                    create_commission_breakup(item)
+                except Exception as e:
+                    _logger.error('Commission breakup failed for item %s: %s', item.id, e)
 
         return Response(OrderDetailSerializer(order).data, status=status.HTTP_201_CREATED)
 
@@ -417,7 +420,11 @@ class AdminOrderViewSet(LoginRequiredMixin, viewsets.ModelViewSet):
         return [IsAdminOrEmployee()]
 
     def get_queryset(self):
-        qs = Order.objects.select_related("user").prefetch_related("items")
+        qs = Order.objects.select_related("user").prefetch_related(
+            "items",
+            "items__commission_breakup",
+            "items__commission_breakup__entries",
+        )
         params = self.request.query_params
 
         search = params.get("search", "").strip()
