@@ -113,8 +113,29 @@ class CommissionBreakupSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
 
+class CommissionEntryAdminSerializer(serializers.ModelSerializer):
+    """Compact entry serializer for embedding inside order detail."""
+    class Meta:
+        model = CommissionEntry
+        fields = [
+            'id',
+            'recipient_name',
+            'recipient_mobile',
+            'recipient_upa_id',
+            'entry_type',
+            'level',
+            'leg_position',
+            'amount',
+            'percentage_applied',
+            'status',
+        ]
+        read_only_fields = fields
+
+
 class CommissionBreakupAdminSerializer(serializers.ModelSerializer):
     """Compact serializer for embedding in order detail."""
+    entries = CommissionEntryAdminSerializer(many=True, read_only=True)
+
     class Meta:
         model = CommissionBreakup
         fields = [
@@ -125,5 +146,6 @@ class CommissionBreakupAdminSerializer(serializers.ModelSerializer):
             'status',
             'return_window_expires',
             'processed_at',
+            'entries',
         ]
         read_only_fields = fields

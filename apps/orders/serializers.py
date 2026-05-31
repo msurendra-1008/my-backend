@@ -3,6 +3,7 @@ from decimal import Decimal
 from rest_framework import serializers
 
 from apps.products.utils import get_upa_price
+from apps.commissions.serializers import CommissionBreakupAdminSerializer
 from .models import Address, Cart, CartItem, Order, OrderItem
 
 
@@ -112,6 +113,7 @@ class OrderItemSerializer(serializers.ModelSerializer):
     product_slug        = serializers.CharField(source="variant.product.slug", read_only=True, allow_null=True)
     return_status       = serializers.SerializerMethodField()
     return_admin_notes  = serializers.SerializerMethodField()
+    commission_breakup  = serializers.SerializerMethodField()
 
     class Meta:
         model  = OrderItem
@@ -120,6 +122,7 @@ class OrderItemSerializer(serializers.ModelSerializer):
             "mrp", "upa_price", "quantity", "line_total",
             "status", "delivered_at", "variant_id", "product_slug",
             "return_rejection_count", "return_status", "return_admin_notes",
+            "commission_breakup",
         ]
 
     def get_return_status(self, obj):
@@ -129,6 +132,12 @@ class OrderItemSerializer(serializers.ModelSerializer):
     def get_return_admin_notes(self, obj):
         rr = obj.return_requests.order_by("-created_at").first()
         return (rr.admin_notes or "") if rr else ""
+
+    def get_commission_breakup(self, obj):
+        try:
+            return CommissionBreakupAdminSerializer(obj.commission_breakup).data
+        except Exception:
+            return None
 
 
 class OrderListSerializer(serializers.ModelSerializer):
