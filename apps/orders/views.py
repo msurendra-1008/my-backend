@@ -2,6 +2,7 @@ from decimal import Decimal, ROUND_HALF_UP
 
 from django.db import transaction
 from django.shortcuts import get_object_or_404
+from django.utils import timezone
 
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
@@ -408,6 +409,44 @@ class UserOrderViewSet(LoginRequiredMixin, viewsets.ReadOnlyModelViewSet):
         ctx = super().get_serializer_context()
         ctx["request"] = self.request
         return ctx
+
+    @action(detail=True, methods=["post"], url_path="mark-satisfied")
+    def mark_satisfied(self, request, pk=None):
+        order = self.get_object()
+
+        if order.user != request.user:
+            return Response({"error": "Not authorized."}, status=status.HTTP_403_FORBIDDEN)
+
+        if order.order_status not in ["confirmed", "packed", "shipped", "delivered"]:
+            return Response({"error": "Order cannot be marked satisfied."}, status=status.HTTP_400_BAD_REQUEST)
+
+        if order.is_satisfied:
+            return Response({"error": "Order already marked as satisfied."}, status=status.HTTP_400_BAD_REQUEST)
+
+        with transaction.atomic():
+            order.is_satisfied = True
+            order.satisfied_at = timezone.now()
+            order.satisfied_by = request.user
+            order.save(update_fields=["is_satisfied", "satisfied_at", "satisfied_by"])
+
+            from apps.commissions.utils import process_commission_breakup
+            for item in order.items.prefetch_related("commission_breakup").all():
+                try:
+                    breakup = item.commission_breakup
+                    if breakup.status == "pending_window":
+                        process_commission_breakup(breakup, processed_by=request.user)
+                except Exception:
+                    pass
+
+            order.items.all().update(
+                return_window_blocked=True,
+                return_window_blocked_reason="satisfied",
+            )
+
+        return Response({
+            "message": "Order marked as satisfied. Commissions credited to upline wallets.",
+            "satisfied_at": order.satisfied_at,
+        })
 
 
 # ── Admin Orders ──────────────────────────────────────────────────────────────

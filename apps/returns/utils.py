@@ -22,6 +22,9 @@ def is_return_eligible(order_item):
     """
     from .models import ACTIVE_REQUEST_STATUSES, ReturnRequest
 
+    if order_item.return_window_blocked:
+        return False, "Return not available — order was marked as satisfied."
+
     settings = get_or_create_return_settings()
 
     if order_item.return_rejection_count >= settings.max_attempts:
