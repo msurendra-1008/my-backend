@@ -69,6 +69,10 @@ class ProductListSerializer(serializers.ModelSerializer):
     variant_count    = serializers.SerializerMethodField()
     total_stock      = serializers.SerializerMethodField()
     first_variant_id = serializers.SerializerMethodField()
+    pricing_configured = serializers.BooleanField(read_only=True)
+    purchase_price   = serializers.DecimalField(
+                         max_digits=10, decimal_places=2, read_only=True, allow_null=True)
+    profit_amount    = serializers.SerializerMethodField()
 
     class Meta:
         model  = Product
@@ -77,6 +81,7 @@ class ProductListSerializer(serializers.ModelSerializer):
             'category_name', 'is_published',
             'stock_label', 'total_stock', 'variant_count',
             'first_variant_id',
+            'pricing_configured', 'purchase_price', 'profit_amount',
         ]
 
     def get_primary_image(self, obj):
@@ -110,6 +115,17 @@ class ProductListSerializer(serializers.ModelSerializer):
             variant = obj.variants.filter(is_active=True).first()
         return str(variant.id) if variant else None
 
+    def get_profit_amount(self, obj):
+        if not obj.purchase_price or not obj.mrp:
+            return None
+        selling  = float(obj.mrp)
+        purchase = float(obj.purchase_price)
+        if obj.other_charges_type == 'flat':
+            other = float(obj.other_charges or 0)
+        else:
+            other = selling * float(obj.other_charges or 0) / 100
+        return round((selling + other) - purchase, 2)
+
 
 # ── ProductDetail ─────────────────────────────────────────────────────────────
 
@@ -120,6 +136,16 @@ class ProductDetailSerializer(serializers.ModelSerializer):
     upa_price   = serializers.SerializerMethodField()
     stock_label = serializers.SerializerMethodField()
     total_stock = serializers.SerializerMethodField()
+    purchase_price     = serializers.DecimalField(
+                           max_digits=10, decimal_places=2, required=False, allow_null=True)
+    gst_percentage     = serializers.DecimalField(
+                           max_digits=5, decimal_places=2, required=False, default=0)
+    other_charges      = serializers.DecimalField(
+                           max_digits=10, decimal_places=2, required=False, default=0)
+    other_charges_type = serializers.ChoiceField(
+                           choices=['flat', 'percent'], required=False, default='flat')
+    pricing_configured = serializers.BooleanField(read_only=True)
+    profit_amount      = serializers.SerializerMethodField()
 
     class Meta:
         model  = Product
@@ -128,6 +154,8 @@ class ProductDetailSerializer(serializers.ModelSerializer):
             'mrp', 'upa_discount_override', 'upa_price_override',
             'is_published', 'created_at', 'updated_at',
             'images', 'variants', 'upa_price', 'stock_label', 'total_stock',
+            'purchase_price', 'gst_percentage', 'other_charges',
+            'other_charges_type', 'pricing_configured', 'profit_amount',
         ]
 
     def get_upa_price(self, obj):
@@ -145,6 +173,17 @@ class ProductDetailSerializer(serializers.ModelSerializer):
 
     def get_total_stock(self, obj):
         return self._total_stock(obj)
+
+    def get_profit_amount(self, obj):
+        if not obj.purchase_price or not obj.mrp:
+            return None
+        selling  = float(obj.mrp)
+        purchase = float(obj.purchase_price)
+        if obj.other_charges_type == 'flat':
+            other = float(obj.other_charges or 0)
+        else:
+            other = selling * float(obj.other_charges or 0) / 100
+        return round((selling + other) - purchase, 2)
 
 
 # ── ProductWrite ─────────────────────────────────────────────────────────────
