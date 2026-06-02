@@ -38,8 +38,12 @@ class ProductImageSerializer(serializers.ModelSerializer):
 # ── ProductVariant ────────────────────────────────────────────────────────────
 
 class ProductVariantSerializer(serializers.ModelSerializer):
-    upa_price    = serializers.SerializerMethodField()
-    stock_label  = serializers.SerializerMethodField()
+    upa_price      = serializers.SerializerMethodField()
+    stock_label    = serializers.SerializerMethodField()
+    purchase_price = serializers.DecimalField(
+                       max_digits=10, decimal_places=2,
+                       required=False, allow_null=True)
+    variant_profit = serializers.SerializerMethodField()
 
     class Meta:
         model  = ProductVariant
@@ -47,6 +51,7 @@ class ProductVariantSerializer(serializers.ModelSerializer):
             'id', 'name', 'variant_type', 'sku', 'mrp',
             'upa_price_override', 'stock_quantity', 'stock_label',
             'is_active', 'upa_price',
+            'purchase_price', 'variant_profit',
         ]
 
     def get_upa_price(self, obj):
@@ -58,6 +63,18 @@ class ProductVariantSerializer(serializers.ModelSerializer):
         if obj.stock_quantity <= 10:
             return 'Low Stock'
         return 'In Stock'
+
+    def get_variant_profit(self, obj):
+        if not obj.purchase_price or not obj.mrp:
+            return None
+        product  = obj.product
+        selling  = float(obj.mrp)
+        purchase = float(obj.purchase_price)
+        if product.other_charges_type == 'flat':
+            other = float(product.other_charges or 0)
+        else:
+            other = selling * float(product.other_charges or 0) / 100
+        return round((selling + other) - purchase, 2)
 
 
 # ── ProductList ───────────────────────────────────────────────────────────────

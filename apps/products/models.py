@@ -143,6 +143,10 @@ class ProductVariant(BaseModel):
     )
     stock_quantity     = models.IntegerField(default=0)
     is_active          = models.BooleanField(default=True)
+    purchase_price     = models.DecimalField(
+                           max_digits=10, decimal_places=2,
+                           null=True, blank=True,
+                           help_text="Cost to procure this variant")
 
     class Meta:
         ordering = ['name']
