@@ -65,6 +65,30 @@ class Product(BaseModel):
         null=True, blank=True, related_name='created_products',
     )
 
+    # ── Pricing ───────────────────────────────────────────────────────────────
+    purchase_price     = models.DecimalField(
+                           max_digits=10, decimal_places=2,
+                           null=True, blank=True,
+                           help_text="Cost company pays to procure")
+    gst_percentage     = models.DecimalField(
+                           max_digits=5, decimal_places=2,
+                           default=0,
+                           help_text="GST % charged to customer, goes to govt")
+    other_charges      = models.DecimalField(
+                           max_digits=10, decimal_places=2,
+                           default=0,
+                           help_text="Shipping/packaging — company keeps")
+    other_charges_type = models.CharField(
+                           max_length=10,
+                           choices=[
+                               ('flat',    'Flat amount'),
+                               ('percent', 'Percentage of selling price'),
+                           ],
+                           default='flat')
+    pricing_configured = models.BooleanField(
+                           default=False,
+                           help_text="True when admin has set pricing")
+
     class Meta:
         ordering = ['-created_at']
 
