@@ -212,19 +212,27 @@ class ProductViewSet(PublicListAuthMixin, viewsets.ModelViewSet):
     @extend_schema(tags=['Products'])
     @action(detail=True, methods=['patch'], url_path='set-pricing')
     def set_pricing(self, request, slug=None):
-        """Set purchase price, GST and other charges for a product."""
+        """Set purchase price, GST, other charges and variant prices."""
         product = get_object_or_404(Product, slug=slug)
 
-        allowed_fields = [
+        product_fields = [
             'purchase_price', 'gst_percentage',
             'other_charges', 'other_charges_type',
         ]
-        data = {k: v for k, v in request.data.items() if k in allowed_fields}
+        for field in product_fields:
+            if field in request.data:
+                setattr(product, field, request.data[field])
 
-        for field, value in data.items():
-            setattr(product, field, value)
+        variant_prices = request.data.get('variant_prices', [])
+        for vp in variant_prices:
+            try:
+                variant = product.variants.get(id=vp['id'])
+                variant.purchase_price = vp['purchase_price']
+                variant.save(update_fields=['purchase_price'])
+            except Exception:
+                pass
 
-        if product.purchase_price:
+        if product.purchase_price or variant_prices:
             product.pricing_configured = True
 
         product.save()
