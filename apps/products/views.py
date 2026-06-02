@@ -210,6 +210,31 @@ class ProductViewSet(PublicListAuthMixin, viewsets.ModelViewSet):
         return Response(data)
 
     @extend_schema(tags=['Products'])
+    @action(detail=True, methods=['patch'], url_path='set-pricing')
+    def set_pricing(self, request, slug=None):
+        """Set purchase price, GST and other charges for a product."""
+        product = get_object_or_404(Product, slug=slug)
+
+        allowed_fields = [
+            'purchase_price', 'gst_percentage',
+            'other_charges', 'other_charges_type',
+        ]
+        data = {k: v for k, v in request.data.items() if k in allowed_fields}
+
+        for field, value in data.items():
+            setattr(product, field, value)
+
+        if product.purchase_price:
+            product.pricing_configured = True
+
+        product.save()
+
+        from apps.products.serializers import ProductDetailSerializer
+        return Response(
+            ProductDetailSerializer(product, context={'request': request}).data
+        )
+
+    @extend_schema(tags=['Products'])
     @action(detail=True, methods=['patch'], url_path='toggle-publish')
     def toggle_publish(self, request, slug=None):
         """Flip is_published for a product."""
