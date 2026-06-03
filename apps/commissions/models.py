@@ -8,8 +8,8 @@ DEFAULT_LEVEL_PERCENTAGES = [40, 25, 15, 10, 5, 3, 2]
 
 class CommissionSettings(BaseModel):
     DIRECTION_CHOICES = [
-        ('top_heavy',    'L1 gets most (direct parent)'),
-        ('bottom_heavy', 'L7 gets most (root)'),
+        ('direct_first',   'Direct parent gets most'),
+        ('ancestor_first', 'Top ancestor gets most'),
     ]
     TRIGGER_CHOICES = [
         ('auto',   'Auto after return window expires'),
@@ -17,9 +17,11 @@ class CommissionSettings(BaseModel):
     ]
     network_commission_pct = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('7.00'))
     team_commission_pct    = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('3.00'))
+    social_work_pct        = models.DecimalField(max_digits=5, decimal_places=2, default=0, help_text="% of profit for social work fund")
+    company_pct            = models.DecimalField(max_digits=5, decimal_places=2, default=0, help_text="% of profit for company")
     max_upline_levels      = models.PositiveIntegerField(default=7)
     use_max_levels         = models.BooleanField(default=False)
-    direction              = models.CharField(max_length=12, choices=DIRECTION_CHOICES, default='top_heavy')
+    direction              = models.CharField(max_length=20, choices=DIRECTION_CHOICES, default='direct_first')
     level_percentages      = models.JSONField(default=list)
     left_leg_pct           = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('40.00'))
     middle_leg_pct         = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('30.00'))
@@ -58,9 +60,11 @@ class ProductCommissionRule(BaseModel):
     is_active              = models.BooleanField(default=True)
     network_commission_pct = models.DecimalField(max_digits=5, decimal_places=2)
     team_commission_pct    = models.DecimalField(max_digits=5, decimal_places=2)
+    social_work_pct        = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+    company_pct            = models.DecimalField(max_digits=5, decimal_places=2, default=0)
     max_upline_levels      = models.PositiveIntegerField(default=7)
     use_max_levels         = models.BooleanField(default=False)
-    direction              = models.CharField(max_length=12, choices=DIRECTION_CHOICES, default='top_heavy')
+    direction              = models.CharField(max_length=20, choices=DIRECTION_CHOICES, default='direct_first')
     level_percentages      = models.JSONField(default=list)
     left_leg_pct           = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('40.00'))
     middle_leg_pct         = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('30.00'))
