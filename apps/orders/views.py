@@ -136,28 +136,51 @@ class CartViewSet(LoginRequiredMixin, viewsets.ViewSet):
 
 def _compute_cart_totals(cart):
     """Returns (subtotal, upa_discount, amount_payable, items_data)."""
-    subtotal = Decimal("0")
-    discount = Decimal("0")
-    items_data = []
+    subtotal      = Decimal("0")
+    discount      = Decimal("0")
+    other_total   = Decimal("0")
+    gst_total     = Decimal("0")
+    items_data    = []
+
     for item in cart.items.select_related("variant__product").all():
-        pdata = get_upa_price(item.variant)
-        mrp   = Decimal(pdata["mrp"])
-        upa   = Decimal(pdata["upa_price"])
-        subtotal  += mrp * item.quantity
-        discount  += (mrp - upa) * item.quantity
+        pdata   = get_upa_price(item.variant)
+        mrp     = Decimal(pdata["mrp"])
+        upa     = Decimal(pdata["upa_price"])
+        product = item.variant.product
+        qty     = item.quantity
+
+        subtotal += mrp * qty
+        discount += (mrp - upa) * qty
+
+        if product.other_charges_type == 'flat':
+            other_per_unit = Decimal(str(product.other_charges or 0))
+        else:
+            other_per_unit = upa * Decimal(str(product.other_charges or 0)) / 100
+        item_other = (other_per_unit * qty).quantize(Decimal("0.01"), ROUND_HALF_UP)
+        other_total += item_other
+
+        gst_pct   = Decimal(str(product.gst_percentage or 0))
+        item_gst  = (upa * gst_pct / 100 * qty).quantize(Decimal("0.01"), ROUND_HALF_UP)
+        gst_total += item_gst
+
+        line_total = (upa * qty + item_other + item_gst).quantize(Decimal("0.01"), ROUND_HALF_UP)
+
         items_data.append({
             "variant":      item.variant,
-            "product_name": item.variant.product.name,
+            "product_name": product.name,
             "variant_name": item.variant.name,
             "sku":          item.variant.sku,
             "mrp":          mrp,
             "upa_price":    upa,
-            "quantity":     item.quantity,
-            "line_total":   (upa * item.quantity).quantize(Decimal("0.01"), ROUND_HALF_UP),
+            "quantity":     qty,
+            "line_total":   line_total,
+            "other_charges": item_other,
+            "gst_amount":   item_gst,
         })
 
-    q = lambda d: d.quantize(Decimal("0.01"), ROUND_HALF_UP)  # noqa: E731
-    return q(subtotal), q(discount), q(subtotal - discount), items_data
+    q           = lambda d: d.quantize(Decimal("0.01"), ROUND_HALF_UP)  # noqa: E731
+    amount_payable = q(subtotal - discount + other_total + gst_total)
+    return q(subtotal), q(discount), amount_payable, items_data
 
 
 class CheckoutInitiateView(LoginRequiredMixin, APIView):
@@ -367,6 +390,8 @@ class CheckoutConfirmView(LoginRequiredMixin, APIView):
                     upa_price=idata["upa_price"],
                     quantity=idata["quantity"],
                     line_total=idata["line_total"],
+                    other_charges=idata["other_charges"],
+                    gst_amount=idata["gst_amount"],
                 )
 
             # Set all order items to 'confirmed'
