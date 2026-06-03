@@ -94,6 +94,7 @@ class ProductListSerializer(serializers.ModelSerializer):
                          max_digits=10, decimal_places=2, read_only=True, allow_null=True)
     profit_amount      = serializers.SerializerMethodField()
     upa_profit_amount  = serializers.SerializerMethodField()
+    has_commission_rule = serializers.SerializerMethodField()
 
     class Meta:
         model  = Product
@@ -104,6 +105,7 @@ class ProductListSerializer(serializers.ModelSerializer):
             'first_variant_id',
             'pricing_configured', 'purchase_price', 'profit_amount',
             'upa_profit_amount', 'upa_discount_override',
+            'has_commission_rule',
         ]
 
     def get_primary_image(self, obj):
@@ -169,6 +171,12 @@ class ProductListSerializer(serializers.ModelSerializer):
         else:
             other = upa_price * float(obj.other_charges or 0) / 100
         return round((upa_price + other) - purchase, 2)
+
+    def get_has_commission_rule(self, obj):
+        try:
+            return obj.commission_rule.is_active
+        except Exception:
+            return False
 
 
 # ── ProductDetail ─────────────────────────────────────────────────────────────
