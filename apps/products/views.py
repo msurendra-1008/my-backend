@@ -216,9 +216,11 @@ class ProductViewSet(PublicListAuthMixin, viewsets.ModelViewSet):
     @action(detail=True, methods=['patch'], url_path='set-pricing')
     def set_pricing(self, request, slug=None):
         """Set purchase price, GST, other charges and variant MRP/UPA prices."""
+        from decimal import Decimal
         logger = logging.getLogger(__name__)
         product = get_object_or_404(Product, slug=slug)
 
+        decimal_fields = {'purchase_price', 'gst_percentage', 'other_charges', 'upa_discount_override'}
         product_fields = [
             'purchase_price', 'gst_percentage',
             'other_charges', 'other_charges_type',
@@ -226,16 +228,19 @@ class ProductViewSet(PublicListAuthMixin, viewsets.ModelViewSet):
         ]
         for field in product_fields:
             if field in request.data:
-                setattr(product, field, request.data[field])
+                value = request.data[field]
+                if field in decimal_fields and value is not None:
+                    value = Decimal(str(value))
+                setattr(product, field, value)
 
         variant_prices = request.data.get('variant_prices', [])
 
-        upa_discount_pct = float(
+        upa_discount_pct = Decimal(str(
             request.data.get(
                 'upa_discount_override',
                 product.upa_discount_override or 0,
             )
-        )
+        ))
 
         with transaction.atomic():
             for vp in variant_prices:
@@ -244,18 +249,18 @@ class ProductViewSet(PublicListAuthMixin, viewsets.ModelViewSet):
                     update_fields = []
 
                     if 'purchase_price' in vp:
-                        variant.purchase_price = vp['purchase_price']
+                        variant.purchase_price = Decimal(str(vp['purchase_price']))
                         update_fields.append('purchase_price')
 
                     if 'selling_price' in vp:
-                        selling = float(vp['selling_price'])
+                        selling = Decimal(str(vp['selling_price']))
                         variant.mrp = selling
                         update_fields.append('mrp')
 
                         if upa_discount_pct > 0:
-                            variant.upa_price = round(
-                                selling * (1 - upa_discount_pct / 100), 2
-                            )
+                            variant.upa_price = (
+                                selling * (1 - upa_discount_pct / 100)
+                            ).quantize(Decimal('0.01'))
                         else:
                             variant.upa_price = selling
                         update_fields.append('upa_price')
