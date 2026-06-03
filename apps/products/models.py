@@ -147,6 +147,10 @@ class ProductVariant(BaseModel):
                            max_digits=10, decimal_places=2,
                            null=True, blank=True,
                            help_text="Cost to procure this variant")
+    upa_price          = models.DecimalField(
+                           max_digits=10, decimal_places=2,
+                           null=True, blank=True,
+                           help_text="Calculated UPA price after discount")
 
     class Meta:
         ordering = ['name']
