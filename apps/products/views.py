@@ -1,3 +1,6 @@
+import logging
+
+from django.db import transaction
 from django.db.models import Q, Sum, Case, When, IntegerField, Value
 from django.db.models.functions import Coalesce
 from django.shortcuts import get_object_or_404
@@ -208,6 +211,78 @@ class ProductViewSet(PublicListAuthMixin, viewsets.ModelViewSet):
             ],
         }
         return Response(data)
+
+    @extend_schema(tags=['Products'])
+    @action(detail=True, methods=['patch'], url_path='set-pricing')
+    def set_pricing(self, request, slug=None):
+        """Set purchase price, GST, other charges and variant MRP/UPA prices."""
+        from decimal import Decimal
+        logger = logging.getLogger(__name__)
+        product = get_object_or_404(Product, slug=slug)
+
+        decimal_fields = {'purchase_price', 'gst_percentage', 'other_charges', 'upa_discount_override'}
+        product_fields = [
+            'purchase_price', 'gst_percentage',
+            'other_charges', 'other_charges_type',
+            'upa_discount_override',
+        ]
+        for field in product_fields:
+            if field in request.data:
+                value = request.data[field]
+                if field in decimal_fields and value is not None:
+                    value = Decimal(str(value))
+                setattr(product, field, value)
+
+        variant_prices = request.data.get('variant_prices', [])
+
+        upa_discount_pct = Decimal(str(
+            request.data.get(
+                'upa_discount_override',
+                product.upa_discount_override or 0,
+            )
+        ))
+
+        with transaction.atomic():
+            for vp in variant_prices:
+                try:
+                    variant = product.variants.get(id=vp['id'])
+                    update_fields = []
+
+                    if 'purchase_price' in vp:
+                        variant.purchase_price = Decimal(str(vp['purchase_price']))
+                        update_fields.append('purchase_price')
+
+                    if 'selling_price' in vp:
+                        selling = Decimal(str(vp['selling_price']))
+                        variant.mrp = selling
+                        update_fields.append('mrp')
+
+                        if upa_discount_pct > 0:
+                            variant.upa_price = (
+                                selling * (1 - upa_discount_pct / 100)
+                            ).quantize(Decimal('0.01'))
+                        else:
+                            variant.upa_price = selling
+                        update_fields.append('upa_price')
+
+                    if update_fields:
+                        variant.save(update_fields=update_fields)
+                except Exception as e:
+                    logger.error(f'Variant pricing error: {e}')
+
+            has_purchase = (
+                any('purchase_price' in vp for vp in variant_prices)
+                or product.purchase_price
+            )
+            if has_purchase:
+                product.pricing_configured = True
+
+            product.save()
+
+        from apps.products.serializers import ProductDetailSerializer
+        return Response(
+            ProductDetailSerializer(product, context={'request': request}).data
+        )
 
     @extend_schema(tags=['Products'])
     @action(detail=True, methods=['patch'], url_path='toggle-publish')
