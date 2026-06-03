@@ -277,6 +277,14 @@ class ProductViewSet(PublicListAuthMixin, viewsets.ModelViewSet):
             if has_purchase:
                 product.pricing_configured = True
 
+            # Sync product.mrp to the lowest active variant MRP
+            variant_mrps = list(
+                product.variants.filter(mrp__isnull=False)
+                .values_list('mrp', flat=True)
+            )
+            if variant_mrps:
+                product.mrp = min(variant_mrps)
+
             product.save()
 
         from apps.products.serializers import ProductDetailSerializer
