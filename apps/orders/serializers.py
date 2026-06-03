@@ -33,8 +33,11 @@ class CartItemSerializer(serializers.ModelSerializer):
     mrp          = serializers.DecimalField(
         source="variant.mrp", max_digits=12, decimal_places=2, read_only=True
     )
-    upa_price    = serializers.SerializerMethodField()
-    primary_image = serializers.SerializerMethodField()
+    upa_price             = serializers.SerializerMethodField()
+    primary_image         = serializers.SerializerMethodField()
+    other_charges_amount  = serializers.SerializerMethodField()
+    gst_amount            = serializers.SerializerMethodField()
+    amount_payable        = serializers.SerializerMethodField()
 
     class Meta:
         model  = CartItem
@@ -42,11 +45,11 @@ class CartItemSerializer(serializers.ModelSerializer):
             "id", "variant_id", "variant_name", "variant_type",
             "product_name", "product_slug", "sku", "stock",
             "mrp", "upa_price", "primary_image", "quantity",
+            "other_charges_amount", "gst_amount", "amount_payable",
         ]
 
     def get_upa_price(self, obj):
-        price_data = get_upa_price(obj.variant)
-        return price_data["upa_price"]
+        return get_upa_price(obj.variant)["upa_price"]
 
     def get_primary_image(self, obj):
         request = self.context.get("request")
@@ -59,6 +62,27 @@ class CartItemSerializer(serializers.ModelSerializer):
             return img.image.url
         return None
 
+    def _upa_price_float(self, obj):
+        return float(get_upa_price(obj.variant)["upa_price"])
+
+    def get_other_charges_amount(self, obj):
+        product   = obj.variant.product
+        upa_price = self._upa_price_float(obj)
+        if product.other_charges_type == 'flat':
+            return round(float(product.other_charges or 0), 2)
+        return round(upa_price * float(product.other_charges or 0) / 100, 2)
+
+    def get_gst_amount(self, obj):
+        upa_price = self._upa_price_float(obj)
+        gst_pct   = float(obj.variant.product.gst_percentage or 0)
+        return round(upa_price * gst_pct / 100, 2)
+
+    def get_amount_payable(self, obj):
+        upa_price = self._upa_price_float(obj)
+        other     = self.get_other_charges_amount(obj)
+        gst       = self.get_gst_amount(obj)
+        return round((upa_price + other + gst) * obj.quantity, 2)
+
 
 class CartSerializer(serializers.ModelSerializer):
     items    = CartItemSerializer(many=True, read_only=True)
@@ -69,19 +93,38 @@ class CartSerializer(serializers.ModelSerializer):
         fields = ["id", "items", "totals"]
 
     def get_totals(self, obj):
-        subtotal = Decimal("0")
-        discount = Decimal("0")
+        subtotal      = Decimal("0")
+        discount      = Decimal("0")
+        other_charges = Decimal("0")
+        gst           = Decimal("0")
+
         for item in obj.items.select_related("variant__product").all():
             price_data = get_upa_price(item.variant)
-            mrp       = Decimal(price_data["mrp"])
-            upa       = Decimal(price_data["upa_price"])
-            subtotal += mrp * item.quantity
-            discount += (mrp - upa) * item.quantity
-        payable = subtotal - discount
+            mrp        = Decimal(price_data["mrp"])
+            upa        = Decimal(price_data["upa_price"])
+            product    = item.variant.product
+            qty        = item.quantity
+
+            subtotal += mrp * qty
+            discount += (mrp - upa) * qty
+
+            if product.other_charges_type == 'flat':
+                other_per_unit = Decimal(str(product.other_charges or 0))
+            else:
+                other_per_unit = upa * Decimal(str(product.other_charges or 0)) / 100
+            other_charges += other_per_unit * qty
+
+            gst_pct = Decimal(str(product.gst_percentage or 0))
+            gst += upa * gst_pct / 100 * qty
+
+        q       = lambda d: str(d.quantize(Decimal("0.01")))  # noqa: E731
+        payable = subtotal - discount + other_charges + gst
         return {
-            "subtotal":       str(subtotal.quantize(Decimal("0.01"))),
-            "upa_discount":   str(discount.quantize(Decimal("0.01"))),
-            "amount_payable": str(payable.quantize(Decimal("0.01"))),
+            "subtotal":       q(subtotal),
+            "upa_discount":   q(discount),
+            "other_charges":  q(other_charges),
+            "gst":            q(gst),
+            "amount_payable": q(payable),
             "item_count":     obj.items.count(),
         }
 

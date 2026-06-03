@@ -166,6 +166,8 @@ class OrderItem(BaseModel):
     upa_price    = models.DecimalField(max_digits=12, decimal_places=2)
     quantity     = models.PositiveIntegerField()
     line_total   = models.DecimalField(max_digits=12, decimal_places=2)
+    other_charges = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+    gst_amount    = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
     status       = models.CharField(
         max_length=30, choices=ORDER_ITEM_STATUS, default="pending"
     )
