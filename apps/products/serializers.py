@@ -92,7 +92,8 @@ class ProductListSerializer(serializers.ModelSerializer):
     pricing_configured = serializers.BooleanField(read_only=True)
     purchase_price   = serializers.DecimalField(
                          max_digits=10, decimal_places=2, read_only=True, allow_null=True)
-    profit_amount    = serializers.SerializerMethodField()
+    profit_amount      = serializers.SerializerMethodField()
+    upa_profit_amount  = serializers.SerializerMethodField()
 
     class Meta:
         model  = Product
@@ -102,6 +103,7 @@ class ProductListSerializer(serializers.ModelSerializer):
             'stock_label', 'total_stock', 'variant_count',
             'first_variant_id',
             'pricing_configured', 'purchase_price', 'profit_amount',
+            'upa_profit_amount', 'upa_discount_override',
         ]
 
     def get_primary_image(self, obj):
@@ -135,16 +137,38 @@ class ProductListSerializer(serializers.ModelSerializer):
             variant = obj.variants.filter(is_active=True).first()
         return str(variant.id) if variant else None
 
+    def _first_priced_variant(self, obj):
+        return obj.variants.filter(purchase_price__isnull=False).first()
+
     def get_profit_amount(self, obj):
-        if not obj.purchase_price or not obj.mrp:
+        variant = self._first_priced_variant(obj)
+        if not variant:
             return None
-        selling  = float(obj.mrp)
-        purchase = float(obj.purchase_price)
+        selling  = float(variant.mrp or 0)
+        purchase = float(variant.purchase_price or 0)
+        if not purchase:
+            return None
         if obj.other_charges_type == 'flat':
             other = float(obj.other_charges or 0)
         else:
             other = selling * float(obj.other_charges or 0) / 100
         return round((selling + other) - purchase, 2)
+
+    def get_upa_profit_amount(self, obj):
+        variant = self._first_priced_variant(obj)
+        if not variant:
+            return None
+        selling  = float(variant.mrp or 0)
+        purchase = float(variant.purchase_price or 0)
+        if not purchase:
+            return None
+        upa_discount = float(obj.upa_discount_override or 0)
+        upa_price    = selling * (1 - upa_discount / 100)
+        if obj.other_charges_type == 'flat':
+            other = float(obj.other_charges or 0)
+        else:
+            other = upa_price * float(obj.other_charges or 0) / 100
+        return round((upa_price + other) - purchase, 2)
 
 
 # ── ProductDetail ─────────────────────────────────────────────────────────────
