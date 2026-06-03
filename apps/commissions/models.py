@@ -92,6 +92,7 @@ class CommissionBreakup(BaseModel):
     status                = models.CharField(max_length=15, choices=STATUS_CHOICES, default='pending_window')
     return_window_expires = models.DateTimeField(null=True, blank=True)
     processed_at          = models.DateTimeField(null=True, blank=True)
+    rule_snapshot         = models.JSONField(default=dict, help_text="Snapshot of commission rule at calculation time")
 
     def __str__(self):
         return f"Breakup({self.order_item})"
@@ -101,6 +102,8 @@ class CommissionEntry(BaseModel):
     ENTRY_TYPE_CHOICES = [
         ('network_upline', 'Network (upline)'),
         ('team_downline',  'Team (downline)'),
+        ('social_work',    'Social Work'),
+        ('company',        'Company'),
     ]
     STATUS_CHOICES = [
         ('pending_window', 'Pending return window'),
@@ -120,7 +123,7 @@ class CommissionEntry(BaseModel):
     recipient_upa_id   = models.CharField(max_length=20, blank=True)
     recipient_name     = models.CharField(max_length=255, blank=True)
     recipient_mobile   = models.CharField(max_length=20, blank=True)
-    entry_type         = models.CharField(max_length=15, choices=ENTRY_TYPE_CHOICES)
+    entry_type         = models.CharField(max_length=20, choices=ENTRY_TYPE_CHOICES)
     level              = models.PositiveIntegerField(null=True, blank=True)
     leg_position       = models.CharField(max_length=6, choices=LEG_CHOICES, blank=True)
     amount             = models.DecimalField(max_digits=12, decimal_places=2)
