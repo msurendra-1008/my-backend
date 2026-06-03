@@ -166,22 +166,28 @@ class CommissionEntryAdminSerializer(serializers.ModelSerializer):
         model = CommissionEntry
         fields = [
             'id',
-            'recipient_name',
-            'recipient_mobile',
-            'recipient_upa_id',
             'entry_type',
             'level',
             'leg_position',
+            'recipient_name',
+            'recipient_mobile',
+            'recipient_upa_id',
             'amount',
             'percentage_applied',
             'status',
+            'credited_at',
         ]
         read_only_fields = fields
 
 
 class CommissionBreakupAdminSerializer(serializers.ModelSerializer):
-    """Compact serializer for embedding in order detail."""
-    entries = CommissionEntryAdminSerializer(many=True, read_only=True)
+    """Full serializer for embedding in order detail — includes profit breakdown."""
+    entries         = CommissionEntryAdminSerializer(many=True, read_only=True)
+    profit_data     = serializers.SerializerMethodField()
+    network_entries = serializers.SerializerMethodField()
+    team_entries    = serializers.SerializerMethodField()
+    social_entries  = serializers.SerializerMethodField()
+    company_entries = serializers.SerializerMethodField()
 
     class Meta:
         model = CommissionBreakup
@@ -193,6 +199,49 @@ class CommissionBreakupAdminSerializer(serializers.ModelSerializer):
             'status',
             'return_window_expires',
             'processed_at',
+            'rule_snapshot',
+            'profit_data',
             'entries',
+            'network_entries',
+            'team_entries',
+            'social_entries',
+            'company_entries',
         ]
         read_only_fields = fields
+
+    def get_profit_data(self, obj):
+        snap = obj.rule_snapshot or {}
+        return {
+            'profit':         snap.get('profit', 0),
+            'upa_price':      snap.get('upa_price', 0),
+            'purchase_total': snap.get('purchase_total', 0),
+            'other_total':    snap.get('other_total', 0),
+            'network_pct':    snap.get('network_pct', 0),
+            'team_pct':       snap.get('team_pct', 0),
+            'social_pct':     snap.get('social_pct', 0),
+            'company_pct':    snap.get('company_pct', 0),
+        }
+
+    def get_network_entries(self, obj):
+        return CommissionEntryAdminSerializer(
+            obj.entries.filter(entry_type='network_upline').order_by('level'),
+            many=True,
+        ).data
+
+    def get_team_entries(self, obj):
+        return CommissionEntryAdminSerializer(
+            obj.entries.filter(entry_type='team_downline'),
+            many=True,
+        ).data
+
+    def get_social_entries(self, obj):
+        return CommissionEntryAdminSerializer(
+            obj.entries.filter(entry_type='social_work'),
+            many=True,
+        ).data
+
+    def get_company_entries(self, obj):
+        return CommissionEntryAdminSerializer(
+            obj.entries.filter(entry_type='company'),
+            many=True,
+        ).data
