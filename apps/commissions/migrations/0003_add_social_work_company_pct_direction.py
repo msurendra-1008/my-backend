@@ -49,7 +49,7 @@ class Migration(migrations.Migration):
             name="social_work_pct",
             field=models.DecimalField(decimal_places=2, default=0, max_digits=5),
         ),
-        migrations.RunPython(migrate_direction_values, migrations.RunPython.noop),
+        # Increase max_length BEFORE data migration so 'ancestor_first' (13 chars) fits
         migrations.AlterField(
             model_name="commissionsettings",
             name="direction",
@@ -74,4 +74,5 @@ class Migration(migrations.Migration):
                 max_length=20,
             ),
         ),
+        migrations.RunPython(migrate_direction_values, migrations.RunPython.noop),
     ]
