@@ -26,6 +26,9 @@ class CommissionSettings(BaseModel):
     left_leg_pct           = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('40.00'))
     middle_leg_pct         = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('30.00'))
     right_leg_pct          = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('30.00'))
+    self_commission_enabled = models.BooleanField(default=False)
+    self_commission_pct     = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+    delivery_packaging_pct  = models.DecimalField(max_digits=5, decimal_places=2, default=0)
     trigger_mode           = models.CharField(max_length=6, choices=TRIGGER_CHOICES, default='auto')
     updated_by             = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
@@ -66,9 +69,12 @@ class ProductCommissionRule(BaseModel):
     use_max_levels         = models.BooleanField(default=False)
     direction              = models.CharField(max_length=20, choices=DIRECTION_CHOICES, default='direct_first')
     level_percentages      = models.JSONField(default=list)
-    left_leg_pct           = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('40.00'))
-    middle_leg_pct         = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('30.00'))
-    right_leg_pct          = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('30.00'))
+    left_leg_pct            = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('40.00'))
+    middle_leg_pct          = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('30.00'))
+    right_leg_pct           = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('30.00'))
+    self_commission_enabled = models.BooleanField(default=False)
+    self_commission_pct     = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+    delivery_packaging_pct  = models.DecimalField(max_digits=5, decimal_places=2, default=0)
     created_by             = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
         null=True, blank=True, related_name='created_commission_rules',
@@ -100,16 +106,18 @@ class CommissionBreakup(BaseModel):
 
 class CommissionEntry(BaseModel):
     ENTRY_TYPE_CHOICES = [
-        ('network_upline', 'Network (upline)'),
-        ('team_downline',  'Team (downline)'),
-        ('social_work',    'Social Work'),
-        ('company',        'Company'),
+        ('network_upline',  'Network (upline)'),
+        ('team_downline',   'Team (downline)'),
+        ('social_work',     'Social Work'),
+        ('company',         'Company'),
+        ('self_commission', 'Self Commission'),
     ]
     STATUS_CHOICES = [
         ('pending_window', 'Pending return window'),
         ('credited',       'Credited to wallet'),
         ('pending',        'Pending — user inactive'),
         ('vacant',         'Vacant leg — skipped'),
+        ('ignored',        'Ignored by admin'),
     ]
     LEG_CHOICES = [
         ('left', 'Left'), ('middle', 'Middle'), ('right', 'Right'),
