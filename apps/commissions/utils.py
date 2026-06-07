@@ -181,6 +181,9 @@ def create_commission_breakup(order_item):
     social_pool  = round(profit * float(rule.social_work_pct)        / 100, 2)
     company_pool = round(profit * float(rule.company_pct)            / 100, 2)
 
+    self_pool    = round(profit * float(rule.self_commission_pct)    / 100, 2) if rule.self_commission_enabled else 0
+    delivery_pool = round(profit * float(rule.delivery_packaging_pct) / 100, 2)
+
     breakup = CommissionBreakup.objects.create(
         order_item        = order_item,
         total_base_amount = profit_data['upa_price'],
@@ -188,22 +191,25 @@ def create_commission_breakup(order_item):
         team_pool         = team_pool,
         status            = 'pending_window',
         rule_snapshot     = {
-            'rule_id':           str(rule.id),
-            'network_pct':       float(rule.network_commission_pct),
-            'team_pct':          float(rule.team_commission_pct),
-            'social_pct':        float(rule.social_work_pct),
-            'company_pct':       float(rule.company_pct),
-            'direction':         rule.direction,
-            'max_upline_levels': rule.max_upline_levels,
-            'use_max_levels':    rule.use_max_levels,
-            'level_percentages': rule.level_percentages,
-            'left_leg_pct':      float(rule.left_leg_pct),
-            'middle_leg_pct':    float(rule.middle_leg_pct),
-            'right_leg_pct':     float(rule.right_leg_pct),
-            'profit':            profit,
-            'upa_price':         profit_data['upa_price'],
-            'purchase_total':    profit_data['purchase_total'],
-            'other_total':       profit_data['other_total'],
+            'rule_id':                  str(rule.id),
+            'network_pct':              float(rule.network_commission_pct),
+            'team_pct':                 float(rule.team_commission_pct),
+            'social_pct':               float(rule.social_work_pct),
+            'company_pct':              float(rule.company_pct),
+            'self_commission_enabled':  rule.self_commission_enabled,
+            'self_pct':                 float(rule.self_commission_pct),
+            'delivery_pct':             float(rule.delivery_packaging_pct),
+            'direction':                rule.direction,
+            'max_upline_levels':        rule.max_upline_levels,
+            'use_max_levels':           rule.use_max_levels,
+            'level_percentages':        rule.level_percentages,
+            'left_leg_pct':             float(rule.left_leg_pct),
+            'middle_leg_pct':           float(rule.middle_leg_pct),
+            'right_leg_pct':            float(rule.right_leg_pct),
+            'profit':                   profit,
+            'upa_price':                profit_data['upa_price'],
+            'purchase_total':           profit_data['purchase_total'],
+            'other_total':              profit_data['other_total'],
         },
     )
 
@@ -273,6 +279,20 @@ def create_commission_breakup(order_item):
                 status             = 'vacant',
             ))
 
+    # ── SELF COMMISSION: credits back to the buyer ────────────────────────────
+    if rule.self_commission_enabled and self_pool > 0:
+        entries.append(CommissionEntry(
+            breakup            = breakup,
+            recipient          = buyer,
+            recipient_upa_id   = buyer.upa_id   or '',
+            recipient_name     = buyer.full_name or '',
+            recipient_mobile   = buyer.mobile   or '',
+            entry_type         = 'self_commission',
+            amount             = self_pool,
+            percentage_applied = float(rule.self_commission_pct),
+            status             = 'pending_window' if buyer.is_active else 'pending',
+        ))
+
     # ── SOCIAL WORK ───────────────────────────────────────────────────────────
     if social_pool > 0:
         entries.append(CommissionEntry(
@@ -320,7 +340,7 @@ def process_commission_breakup(breakup, processed_by=None):
     for entry in breakup.entries.filter(status='pending_window'):
 
         # Fund entries — mark credited, no wallet needed
-        if entry.entry_type in ('social_work', 'company'):
+        if entry.entry_type in ('social_work', 'company', 'delivery_packaging'):
             entry.status      = 'credited'
             entry.credited_at = timezone.now()
             entry.save()
@@ -341,7 +361,12 @@ def process_commission_breakup(breakup, processed_by=None):
             wallet.balance += Decimal(str(entry.amount))
             wallet.save()
 
-            level_label = f'L{entry.level}' if entry.level else entry.leg_position
+            if entry.entry_type == 'self_commission':
+                level_label = 'Self Commission'
+            elif entry.level:
+                level_label = f'L{entry.level}'
+            else:
+                level_label = entry.leg_position or entry.entry_type
             tx = WalletTransaction.objects.create(
                 wallet       = wallet,
                 type         = 'credit',
