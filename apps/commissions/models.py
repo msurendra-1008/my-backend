@@ -117,6 +117,7 @@ class CommissionEntry(BaseModel):
         ('credited',       'Credited to wallet'),
         ('pending',        'Pending — user inactive'),
         ('vacant',         'Vacant leg — skipped'),
+        ('ignored',        'Ignored by admin'),
     ]
     LEG_CHOICES = [
         ('left', 'Left'), ('middle', 'Middle'), ('right', 'Right'),

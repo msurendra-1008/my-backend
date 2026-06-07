@@ -2,6 +2,84 @@ from rest_framework import serializers
 from .models import CommissionSettings, ProductCommissionRule, CommissionBreakup, CommissionEntry
 
 
+class PendingCommissionSerializer(serializers.ModelSerializer):
+    order_number        = serializers.SerializerMethodField()
+    product_name        = serializers.SerializerMethodField()
+    buyer_name          = serializers.SerializerMethodField()
+    buyer_upa_id        = serializers.SerializerMethodField()
+    upa_profit          = serializers.SerializerMethodField()
+    pool_amount         = serializers.SerializerMethodField()
+    pending_since       = serializers.SerializerMethodField()
+    recipient_is_active = serializers.SerializerMethodField()
+    upline_chain        = serializers.SerializerMethodField()
+
+    class Meta:
+        model  = CommissionEntry
+        fields = [
+            'id', 'entry_type', 'level', 'leg_position',
+            'recipient_name', 'recipient_mobile',
+            'recipient_upa_id', 'amount',
+            'percentage_applied', 'status',
+            'order_number', 'product_name',
+            'buyer_name', 'buyer_upa_id',
+            'upa_profit', 'pool_amount',
+            'pending_since', 'recipient_is_active',
+            'upline_chain',
+        ]
+
+    def get_order_number(self, obj):
+        return obj.breakup.order_item.order.order_number
+
+    def get_product_name(self, obj):
+        return obj.breakup.order_item.product_name
+
+    def get_buyer_name(self, obj):
+        buyer = obj.breakup.order_item.order.user
+        return buyer.full_name if buyer else ''
+
+    def get_buyer_upa_id(self, obj):
+        buyer = obj.breakup.order_item.order.user
+        return (getattr(buyer, 'upa_id', '') or '') if buyer else ''
+
+    def get_upa_profit(self, obj):
+        snap = obj.breakup.rule_snapshot or {}
+        return snap.get('profit', 0)
+
+    def get_pool_amount(self, obj):
+        if obj.entry_type == 'network_upline':
+            return float(obj.breakup.network_pool)
+        elif obj.entry_type == 'team_downline':
+            return float(obj.breakup.team_pool)
+        return 0
+
+    def get_pending_since(self, obj):
+        return obj.breakup.order_item.order.created_at
+
+    def get_recipient_is_active(self, obj):
+        if not obj.recipient:
+            return False
+        return obj.recipient.is_active
+
+    def get_upline_chain(self, obj):
+        buyer_name   = self.get_buyer_name(obj)
+        buyer_upa_id = self.get_buyer_upa_id(obj)
+        if obj.entry_type == 'network_upline':
+            return {
+                'type':         'upline',
+                'level':        obj.level,
+                'buyer_name':   buyer_name,
+                'buyer_upa_id': buyer_upa_id,
+            }
+        elif obj.entry_type == 'team_downline':
+            return {
+                'type':         'downline',
+                'leg':          obj.leg_position,
+                'buyer_name':   buyer_name,
+                'buyer_upa_id': buyer_upa_id,
+            }
+        return None
+
+
 class CommissionSettingsSerializer(serializers.ModelSerializer):
     social_work_pct         = serializers.DecimalField(max_digits=5, decimal_places=2)
     company_pct             = serializers.DecimalField(max_digits=5, decimal_places=2)

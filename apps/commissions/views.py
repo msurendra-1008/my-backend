@@ -11,6 +11,7 @@ from .serializers import (
     ProductCommissionRuleSerializer,
     CommissionBreakupSerializer,
     CommissionEntrySerializer,
+    PendingCommissionSerializer,
 )
 from .utils import process_commission_breakup, credit_pending_entry
 
@@ -118,15 +119,20 @@ class CommissionBreakupViewSet(viewsets.ReadOnlyModelViewSet):
 # ── Pending Commission Entries ────────────────────────────────────────────────
 
 class PendingCommissionViewSet(viewsets.ReadOnlyModelViewSet):
-    serializer_class = CommissionEntrySerializer
+    serializer_class = PendingCommissionSerializer
 
     def get_permissions(self):
         return [IsAdminOrEmployee()]
 
     def get_queryset(self):
+        show_ignored = self.request.query_params.get('show_ignored') == 'true'
+        base_statuses = ['pending', 'vacant', 'ignored'] if show_ignored else ['pending', 'vacant']
+
         qs = CommissionEntry.objects.select_related(
-            'recipient', 'breakup__order_item__order', 'wallet_transaction'
-        ).filter(status__in=['pending', 'vacant'])
+            'recipient',
+            'breakup__order_item__order__user',
+            'wallet_transaction',
+        ).filter(status__in=base_statuses)
 
         entry_type = self.request.query_params.get('entry_type')
         if entry_type:
@@ -136,17 +142,60 @@ class PendingCommissionViewSet(viewsets.ReadOnlyModelViewSet):
         if entry_status:
             qs = qs.filter(status=entry_status)
 
-        return qs
+        search = self.request.query_params.get('search', '').strip()
+        if search:
+            from django.db.models import Q
+            qs = qs.filter(
+                Q(recipient_name__icontains=search)
+                | Q(recipient_upa_id__icontains=search)
+                | Q(recipient_mobile__icontains=search)
+                | Q(breakup__order_item__order__order_number__icontains=search)
+            )
+
+        return qs.order_by('-breakup__order_item__order__created_at')
 
     @action(detail=True, methods=['patch'], url_path='credit')
     def credit(self, request, pk=None):
         entry = self.get_object()
+
+        if entry.status == 'vacant':
+            return Response(
+                {'error': 'Cannot credit — leg is still vacant.', 'reason': 'vacant_leg'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if entry.status == 'ignored':
+            return Response(
+                {'error': 'This entry has been ignored.', 'reason': 'ignored'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if entry.status == 'credited':
+            return Response(
+                {'error': 'Already credited.', 'reason': 'already_credited'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if not entry.recipient or not entry.recipient.is_active:
+            return Response(
+                {'error': 'Cannot credit — user is still inactive.', 'reason': 'user_inactive'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         try:
             credit_pending_entry(entry, credited_by=request.user)
-        except ValueError as e:
-            return Response({'detail': str(e)}, status=status.HTTP_400_BAD_REQUEST)
-        entry.refresh_from_db()
-        return Response(CommissionEntrySerializer(entry).data)
+            return Response({'status': 'credited'})
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=['patch'], url_path='ignore')
+    def ignore(self, request, pk=None):
+        entry = self.get_object()
+        if entry.status not in ('pending', 'vacant'):
+            return Response(
+                {'error': 'Only pending or vacant entries can be ignored.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        entry.status = 'ignored'
+        entry.save()
+        return Response({'status': 'ignored'})
 
     @action(detail=False, methods=['post'], url_path='credit-bulk')
     def credit_bulk(self, request):
@@ -162,28 +211,20 @@ class PendingCommissionViewSet(viewsets.ReadOnlyModelViewSet):
                     credited_ids.append(str(entry.id))
                 except Exception as e:
                     errors.append({'id': str(entry.id), 'error': str(e)})
-        return Response({
-            'credited': credited_ids,
-            'errors':   errors,
-        })
+        return Response({'credited': credited_ids, 'errors': errors})
 
     @action(detail=False, methods=['get'], url_path='stats')
     def stats(self, request):
-        from django.db.models import Sum, Count
-        from decimal import Decimal
-
-        all_entries = CommissionEntry.objects.all()
-
-        def _agg(qs):
-            result = qs.aggregate(count=Count('id'), total=Sum('amount'))
-            return {
-                'count': result['count'] or 0,
-                'total': str(result['total'] or Decimal('0')),
-            }
-
+        from django.db.models import Sum
+        qs = CommissionEntry.objects.all()
         return Response({
-            'pending': _agg(all_entries.filter(status='pending')),
-            'vacant':  _agg(all_entries.filter(status='vacant')),
-            'credited': _agg(all_entries.filter(status='credited')),
-            'total':    _agg(all_entries),
+            'total_pending_amount': str(
+                qs.filter(status__in=['pending', 'vacant'])
+                  .aggregate(t=Sum('amount'))['t'] or 0
+            ),
+            'pending_count':       qs.filter(status='pending').count(),
+            'vacant_count':        qs.filter(status='vacant').count(),
+            'ignored_count':       qs.filter(status='ignored').count(),
+            'inactive_user_count': qs.filter(status='pending').count(),
+            'vacant_leg_count':    qs.filter(status='vacant').count(),
         })
