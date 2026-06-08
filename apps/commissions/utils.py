@@ -34,13 +34,10 @@ def get_profit_for_order_item(order_item):
     upa_per_unit = float(order_item.upa_price)
 
     # Other charges per unit (shipping/packaging the company keeps)
-    selling_per_unit = float(
-        (variant.mrp if variant else None) or product.mrp or 0
-    )
     if product.other_charges_type == 'flat':
         other_per_unit = float(product.other_charges or 0)
     else:
-        other_per_unit = selling_per_unit * float(product.other_charges or 0) / 100
+        other_per_unit = upa_per_unit * float(product.other_charges or 0) / 100
 
     qty = order_item.quantity
     upa_total      = upa_per_unit      * qty
