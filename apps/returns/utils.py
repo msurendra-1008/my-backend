@@ -102,6 +102,13 @@ def process_approved_return(return_request, admin_user=None, admin_notes=""):
         triggered_by=return_request.reviewed_by,
     )
 
+    try:
+        from apps.company_wallet.utils import record_refund_paid
+        record_refund_paid(return_request.order_item, refund_amount)
+    except Exception as _cw_err:
+        import logging
+        logging.getLogger(__name__).error('CompanyWallet record_refund_paid failed: %s', _cw_err)
+
     # Restock inventory — return to original rack if known, else direct update
     if return_request.order_item.variant_id:
         from apps.products.models import ProductVariant
