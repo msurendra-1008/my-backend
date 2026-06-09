@@ -411,6 +411,14 @@ class CheckoutConfirmView(LoginRequiredMixin, APIView):
                 except Exception as e:
                     _logger.error('Commission breakup failed for item %s: %s', item.id, e)
 
+        # Company wallet — record order received
+        try:
+            from apps.company_wallet.utils import record_order_received
+            record_order_received(order)
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error('CompanyWallet record_order_received failed: %s', e)
+
         return Response(OrderDetailSerializer(order).data, status=status.HTTP_201_CREATED)
 
 

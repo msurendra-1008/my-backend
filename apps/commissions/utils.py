@@ -376,6 +376,13 @@ def process_commission_breakup(breakup, processed_by=None):
             entry.credited_at        = timezone.now()
             entry.save()
 
+            try:
+                from apps.company_wallet.utils import record_commission_paid
+                record_commission_paid(entry)
+            except Exception as _cw_err:
+                import logging
+                logging.getLogger(__name__).error('CompanyWallet commission_paid failed: %s', _cw_err)
+
         except Exception as e:
             import logging
             logging.getLogger(__name__).error(
@@ -422,6 +429,13 @@ def credit_pending_entry(entry, credited_by=None):
         entry.credited_at        = timezone.now()
         entry.status             = 'credited'
         entry.save()
+
+        try:
+            from apps.company_wallet.utils import record_commission_paid
+            record_commission_paid(entry)
+        except Exception as _cw_err:
+            import logging
+            logging.getLogger(__name__).error('CompanyWallet commission_paid failed: %s', _cw_err)
 
         breakup = entry.breakup
         if not breakup.entries.filter(status='pending').exists():
