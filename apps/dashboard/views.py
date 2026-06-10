@@ -241,13 +241,23 @@ class DashboardStatsView(APIView):
         # ── DAILY REVENUE ──────────────────────────────────────────────────────
         daily_revenue = []
         try:
-            daily_data = dict(
+            # TruncDate can return datetime/date/str depending on DB backend.
+            # Normalise all keys to datetime.date so dict lookup works reliably.
+            raw = (
                 orders_qs
                 .annotate(day=TruncDate('created_at'))
                 .values('day')
                 .annotate(rev=Sum('amount_payable'))
                 .values_list('day', 'rev')
             )
+            daily_data = {}
+            for key, rev in raw:
+                if hasattr(key, 'date'):       # datetime → date
+                    key = key.date()
+                elif isinstance(key, str):     # str → date
+                    key = date.fromisoformat(key[:10])
+                daily_data[key] = rev
+
             current = start
             count   = 0
             while current <= end and count < 60:
