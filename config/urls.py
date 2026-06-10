@@ -4,6 +4,7 @@ from django.conf import settings
 from django.conf.urls.static import static
 from accounts.views import MeViewSet
 from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
+from apps.dashboard.views import DashboardStatsView
 
 me_view = MeViewSet.as_view({"get": "retrieve", "patch": "partial_update"})
 
@@ -26,6 +27,7 @@ urlpatterns = [
     path('api/v1/tender/', include('apps.tender.urls')),
     path('api/v1/commissions/', include('apps.commissions.urls')),
     path('api/v1/company-wallet/', include('apps.company_wallet.urls')),
+    path('api/v1/dashboard/stats/', DashboardStatsView.as_view(), name='dashboard-stats'),
     # Docs
     path('api/schema/', SpectacularAPIView.as_view(), name='schema'),
     path('api/docs/', SpectacularSwaggerView.as_view(url_name='schema'), name='swagger-ui'),
