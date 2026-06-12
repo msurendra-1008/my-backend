@@ -239,29 +239,17 @@ class DashboardStatsView(APIView):
             pass
 
         # ── DAILY REVENUE ──────────────────────────────────────────────────────
+        # Use created_at__date= filter per day — avoids TruncDate key-type
+        # mismatches that differ across DB backends (PostgreSQL/SQLite/MySQL).
         daily_revenue = []
         try:
-            # TruncDate can return datetime/date/str depending on DB backend.
-            # Normalise all keys to datetime.date so dict lookup works reliably.
-            raw = (
-                orders_qs
-                .annotate(day=TruncDate('created_at'))
-                .values('day')
-                .annotate(rev=Sum('amount_payable'))
-                .values_list('day', 'rev')
-            )
-            daily_data = {}
-            for key, rev in raw:
-                if hasattr(key, 'date'):       # datetime → date
-                    key = key.date()
-                elif isinstance(key, str):     # str → date
-                    key = date.fromisoformat(key[:10])
-                daily_data[key] = rev
-
             current = start
             count   = 0
             while current <= end and count < 60:
-                rev = float(daily_data.get(current, 0) or 0)
+                rev = float(
+                    orders_qs.filter(created_at__date=current)
+                    .aggregate(t=Sum('amount_payable'))['t'] or 0
+                )
                 daily_revenue.append({'date': current.strftime('%d %b'), 'revenue': rev})
                 current += timedelta(days=1)
                 count   += 1
@@ -342,4 +330,18 @@ class DashboardStatsView(APIView):
             'daily_revenue': daily_revenue,
             'recent_orders': recent_orders_data,
             'tenders':       {'open': open_tenders},
+            **({
+                '_debug': {
+                    'period_start':         start.isoformat(),
+                    'period_end':           end.isoformat(),
+                    'orders_in_period':     total_orders,
+                    'revenue_in_period':    float(revenue),
+                    'daily_revenue_sample': daily_revenue[:5],
+                    'daily_nonzero_days':   sum(1 for d in daily_revenue if d['revenue'] > 0),
+                    'recent_order_dates':   [
+                        o.created_at.isoformat()
+                        for o in Order.objects.order_by('-created_at')[:5]
+                    ],
+                }
+            } if request.query_params.get('debug') == '1' else {}),
         })
