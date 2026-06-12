@@ -116,6 +116,16 @@ class Order(BaseModel):
     # Shipping
     tracking_number = models.CharField(max_length=100, blank=True)
 
+    # Offline POS billing
+    is_offline   = models.BooleanField(default=False)
+    order_type   = models.CharField(
+        max_length=10,
+        choices=[('upa', 'UPA'), ('regular', 'Regular')],
+        default='regular',
+        blank=True,
+    )
+    payment_method = models.CharField(max_length=10, blank=True, default='')
+
     # Satisfied
     is_satisfied = models.BooleanField(default=False)
     satisfied_at = models.DateTimeField(null=True, blank=True)
