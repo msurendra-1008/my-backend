@@ -231,3 +231,37 @@ class UserSearchView(generics.ListAPIView):
         if role:
             qs = qs.filter(role=role)
         return qs[:20]
+
+
+class QuickUserCreateView(generics.CreateAPIView):
+    """Create a minimal user account for HR linking. Admin only. Auto-generates password."""
+    permission_classes = [IsAdmin]
+
+    def create(self, request, *args, **kwargs):
+        import secrets
+        name   = (request.data.get('name') or '').strip()
+        email  = (request.data.get('email') or '').strip() or None
+        mobile = (request.data.get('mobile') or '').strip() or None
+
+        if not name:
+            return Response({'error': 'name is required'}, status=400)
+        if not email and not mobile:
+            return Response({'error': 'email or mobile is required'}, status=400)
+        if email and User.objects.filter(email=email).exists():
+            return Response({'email': ['Email already in use.']}, status=400)
+        if mobile and User.objects.filter(mobile=mobile).exists():
+            return Response({'mobile': ['Mobile already in use.']}, status=400)
+
+        first_name, *rest = name.split(' ', 1)
+        last_name = rest[0] if rest else ''
+        kwargs_create = {'first_name': first_name, 'last_name': last_name, 'role': 'employee'}
+        if email:
+            kwargs_create['email'] = email
+        if mobile:
+            kwargs_create['mobile'] = mobile
+
+        user = User.objects.create_user(
+            password=secrets.token_urlsafe(12),
+            **kwargs_create,
+        )
+        return Response(EmployeeListSerializer(user, context={'request': request}).data, status=201)
