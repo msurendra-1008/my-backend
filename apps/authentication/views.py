@@ -1,4 +1,4 @@
-from rest_framework import status, serializers as s, viewsets
+from rest_framework import status, serializers as s, viewsets, generics
 from rest_framework.decorators import action
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -6,10 +6,11 @@ from rest_framework.response import Response
 from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework_simplejwt.tokens import RefreshToken
 from drf_spectacular.utils import extend_schema, extend_schema_view, inline_serializer
+from django.db.models import Q
 
 from core.mixins import LoginRequiredMixin
 from accounts.models import User
-from .permissions import IsAdmin
+from .permissions import IsAdmin, IsAdminOrEmployee
 from .serializers import (
     AdminLoginSerializer, UPARegisterSerializer, UPALoginSerializer,
     EmployeeRegisterSerializer, EmployeeUpdateSerializer,
@@ -208,3 +209,59 @@ class UPAUserViewSet(LoginRequiredMixin, viewsets.ReadOnlyModelViewSet):
             'standalone': standalone,
             'networked':  total - standalone,
         })
+
+
+class UserSearchView(generics.ListAPIView):
+    """Search all users by name/email/mobile. Admin only. Used for HR employee linking."""
+    permission_classes = [IsAdmin]
+    serializer_class   = EmployeeListSerializer
+    pagination_class   = None
+
+    def get_queryset(self):
+        qs     = User.objects.all().order_by('first_name', 'last_name')
+        search = self.request.query_params.get('search', '').strip()
+        role   = self.request.query_params.get('role', '').strip()
+        if search:
+            qs = qs.filter(
+                Q(first_name__icontains=search) |
+                Q(last_name__icontains=search)  |
+                Q(email__icontains=search)       |
+                Q(mobile__icontains=search)
+            )
+        if role:
+            qs = qs.filter(role=role)
+        return qs[:20]
+
+
+class QuickUserCreateView(generics.CreateAPIView):
+    """Create a minimal user account for HR linking. Admin only. Auto-generates password."""
+    permission_classes = [IsAdmin]
+
+    def create(self, request, *args, **kwargs):
+        import secrets
+        name   = (request.data.get('name') or '').strip()
+        email  = (request.data.get('email') or '').strip() or None
+        mobile = (request.data.get('mobile') or '').strip() or None
+
+        if not name:
+            return Response({'error': 'name is required'}, status=400)
+        if not email and not mobile:
+            return Response({'error': 'email or mobile is required'}, status=400)
+        if email and User.objects.filter(email=email).exists():
+            return Response({'email': ['Email already in use.']}, status=400)
+        if mobile and User.objects.filter(mobile=mobile).exists():
+            return Response({'mobile': ['Mobile already in use.']}, status=400)
+
+        first_name, *rest = name.split(' ', 1)
+        last_name = rest[0] if rest else ''
+        kwargs_create = {'first_name': first_name, 'last_name': last_name, 'role': 'employee'}
+        if email:
+            kwargs_create['email'] = email
+        if mobile:
+            kwargs_create['mobile'] = mobile
+
+        user = User.objects.create_user(
+            password=secrets.token_urlsafe(12),
+            **kwargs_create,
+        )
+        return Response(EmployeeListSerializer(user, context={'request': request}).data, status=201)
