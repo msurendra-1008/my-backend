@@ -1,7 +1,7 @@
 import logging
 import random
 import string
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 
 from django.db import transaction
@@ -200,8 +200,13 @@ def create_offline_bill(data, billed_by):
     if is_upa:
         try:
             from apps.commissions.utils import create_commission_breakup
+            from apps.commissions.models import CommissionBreakup
             for oi in order.items.all():
                 create_commission_breakup(oi)
+            # Offline orders are delivered immediately — set 2-day return window now
+            CommissionBreakup.objects.filter(order_item__order=order).update(
+                return_window_expires=timezone.now() + timedelta(days=2)
+            )
         except Exception as e:
             logger.error('Commission failed for %s: %s', order.order_number, e)
 

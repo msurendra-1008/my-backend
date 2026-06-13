@@ -98,6 +98,37 @@ class BillingViewSet(viewsets.ViewSet):
         except OfflineBill.DoesNotExist:
             return Response({'error': 'Bill not found'}, status=404)
 
+    @action(detail=False, methods=['get'], url_path='offline-orders')
+    def offline_orders(self, request):
+        from apps.orders.models import Order
+        from apps.orders.serializers import OrderListSerializer
+
+        qs = Order.objects.filter(is_offline=True).select_related('user').prefetch_related(
+            'items', 'offline_bill',
+        ).order_by('-created_at')
+
+        search = request.query_params.get('search', '').strip()
+        if search:
+            from django.db.models import Q
+            qs = qs.filter(
+                Q(order_number__icontains=search) |
+                Q(offline_bill__bill_number__icontains=search)
+            )
+
+        date_from = request.query_params.get('date_from', '')
+        if date_from:
+            qs = qs.filter(created_at__date__gte=date_from)
+        date_to = request.query_params.get('date_to', '')
+        if date_to:
+            qs = qs.filter(created_at__date__lte=date_to)
+
+        paginator = PageNumberPagination()
+        paginator.page_size = 20
+        page = paginator.paginate_queryset(qs, request)
+        return paginator.get_paginated_response(
+            OrderListSerializer(page, many=True).data
+        )
+
     @action(detail=False, methods=['post'], url_path='returns')
     def create_return(self, request):
         bill_number = request.data.get('bill_number')
