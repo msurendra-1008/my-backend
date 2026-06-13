@@ -3,15 +3,16 @@ from .models import CommissionSettings, ProductCommissionRule, CommissionBreakup
 
 
 class PendingCommissionSerializer(serializers.ModelSerializer):
-    order_number        = serializers.SerializerMethodField()
-    product_name        = serializers.SerializerMethodField()
-    buyer_name          = serializers.SerializerMethodField()
-    buyer_upa_id        = serializers.SerializerMethodField()
-    upa_profit          = serializers.SerializerMethodField()
-    pool_amount         = serializers.SerializerMethodField()
-    pending_since       = serializers.SerializerMethodField()
-    recipient_is_active = serializers.SerializerMethodField()
-    upline_chain        = serializers.SerializerMethodField()
+    order_number          = serializers.SerializerMethodField()
+    product_name          = serializers.SerializerMethodField()
+    buyer_name            = serializers.SerializerMethodField()
+    buyer_upa_id          = serializers.SerializerMethodField()
+    upa_profit            = serializers.SerializerMethodField()
+    pool_amount           = serializers.SerializerMethodField()
+    pending_since         = serializers.SerializerMethodField()
+    recipient_is_active   = serializers.SerializerMethodField()
+    upline_chain          = serializers.SerializerMethodField()
+    return_window_expires = serializers.DateTimeField(source='breakup.return_window_expires', read_only=True)
 
     class Meta:
         model  = CommissionEntry
@@ -24,7 +25,7 @@ class PendingCommissionSerializer(serializers.ModelSerializer):
             'buyer_name', 'buyer_upa_id',
             'upa_profit', 'pool_amount',
             'pending_since', 'recipient_is_active',
-            'upline_chain',
+            'upline_chain', 'return_window_expires',
         ]
 
     def get_order_number(self, obj):

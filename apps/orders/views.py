@@ -499,10 +499,11 @@ class AdminOrderViewSet(LoginRequiredMixin, viewsets.ModelViewSet):
         )
         params = self.request.query_params
 
-        # Exclude offline (POS) orders unless explicitly requested
-        include_offline = params.get("include_offline", "").lower() == "true"
-        if not include_offline:
-            qs = qs.filter(is_offline=False)
+        # Only exclude offline orders from the LIST — retrieve must work for any order
+        if self.action == 'list':
+            include_offline = params.get("include_offline", "").lower() == "true"
+            if not include_offline:
+                qs = qs.filter(is_offline=False)
 
         search = params.get("search", "").strip()
         if search:
