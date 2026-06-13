@@ -1,4 +1,5 @@
 from decimal import Decimal
+from datetime import timedelta
 from django.db import transaction
 from django.utils import timezone
 
@@ -181,13 +182,25 @@ def create_commission_breakup(order_item):
     self_pool    = round(profit * float(rule.self_commission_pct)    / 100, 2) if rule.self_commission_enabled else 0
     delivery_pool = round(profit * float(rule.delivery_packaging_pct) / 100, 2)
 
+    # For offline orders, set return window immediately (2 days from bill date)
+    order = order_item.order
+    if getattr(order, 'is_offline', False):
+        try:
+            bill_date = order.offline_bill.created_at
+        except Exception:
+            bill_date = order.created_at
+        _return_window = bill_date + timedelta(days=2)
+    else:
+        _return_window = None  # set later when order is marked delivered
+
     breakup = CommissionBreakup.objects.create(
-        order_item        = order_item,
-        total_base_amount = profit_data['upa_price'],
-        network_pool      = network_pool,
-        team_pool         = team_pool,
-        status            = 'pending_window',
-        rule_snapshot     = {
+        order_item            = order_item,
+        total_base_amount     = profit_data['upa_price'],
+        network_pool          = network_pool,
+        team_pool             = team_pool,
+        status                = 'pending_window',
+        return_window_expires = _return_window,
+        rule_snapshot         = {
             'rule_id':                  str(rule.id),
             'network_pct':              float(rule.network_commission_pct),
             'team_pct':                 float(rule.team_commission_pct),
