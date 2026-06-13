@@ -33,6 +33,7 @@ class CompanyTransaction(BaseModel):
         ('gst_paid',           'GST Paid'),
         ('manual_credit',      'Manual Credit'),
         ('manual_debit',       'Manual Debit'),
+        ('salary_paid',        'Salary Paid'),
     ]
 
     wallet           = models.ForeignKey(CompanyWallet, on_delete=models.PROTECT, related_name='transactions')
