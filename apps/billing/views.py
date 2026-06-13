@@ -6,11 +6,12 @@ from rest_framework.pagination import PageNumberPagination
 from rest_framework.response import Response
 
 from apps.authentication.permissions import IsAdmin, IsAdminOrEmployee
-from .models import DiscountCode, OfflineBill, OfflineReturn
+from .models import DiscountCode, OfflineBill, OfflineReturn, BillingSettings
 from .serializers import (
     DiscountCodeSerializer, CreateBillSerializer,
     OfflineBillSerializer, ValidateDiscountSerializer,
     OfflineReturnSerializer,
+    BillingSettingsSerializer, UpdateBillingSettingsSerializer,
 )
 
 logger = logging.getLogger(__name__)
@@ -145,10 +146,14 @@ class BillingViewSet(viewsets.ViewSet):
 
         from django.utils import timezone
         from datetime import timedelta
-        if timezone.now() > bill.created_at + timedelta(days=2):
+        allowed_days = BillingSettings.get_return_days()
+        if timezone.now() > bill.created_at + timedelta(days=allowed_days):
             return Response({
-                'error':     'Return period of 2 days expired',
-                'bill_date': bill.created_at.isoformat(),
+                'error':        (f'Return period of {allowed_days} '
+                                 f'day{"s" if allowed_days != 1 else ""} has expired'),
+                'bill_date':    bill.created_at.isoformat(),
+                'allowed_days': allowed_days,
+                'expired_at':   (bill.created_at + timedelta(days=allowed_days)).isoformat(),
             }, status=400)
 
         from apps.orders.models import OrderItem
@@ -226,3 +231,23 @@ class BillingViewSet(viewsets.ViewSet):
                     logger.error('Wallet refund failed: %s', e)
 
         return Response(OfflineReturnSerializer(ret).data)
+
+    @action(detail=False, methods=['get'],
+            url_path='settings',
+            permission_classes=[IsAdminOrEmployee])
+    def get_settings(self, request):
+        s = BillingSettings.get()
+        return Response(BillingSettingsSerializer(s).data)
+
+    @action(detail=False, methods=['patch'],
+            url_path='settings/update',
+            permission_classes=[IsAdmin])
+    def update_settings(self, request):
+        ser = UpdateBillingSettingsSerializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+        s = BillingSettings.get()
+        s.return_window_enabled = ser.validated_data['return_window_enabled']
+        s.return_window_days    = ser.validated_data['return_window_days']
+        s.updated_by            = request.user
+        s.save()
+        return Response(BillingSettingsSerializer(s).data)
