@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import DiscountCode, OfflineBill, OfflineReturn
+from .models import DiscountCode, OfflineBill, OfflineReturn, BillingSettings
 
 
 @admin.register(DiscountCode)
@@ -24,3 +24,15 @@ class OfflineReturnAdmin(admin.ModelAdmin):
     def get_bill(self, obj):
         return obj.bill.bill_number
     get_bill.short_description = 'Bill'
+
+
+@admin.register(BillingSettings)
+class BillingSettingsAdmin(admin.ModelAdmin):
+    list_display    = ('return_window_enabled', 'return_window_days', 'updated_at', 'updated_by')
+    readonly_fields = ('updated_at', 'updated_by')
+
+    def has_add_permission(self, request):
+        return not BillingSettings.objects.exists()
+
+    def has_delete_permission(self, request, obj=None):
+        return False

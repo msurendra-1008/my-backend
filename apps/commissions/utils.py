@@ -189,7 +189,8 @@ def create_commission_breakup(order_item):
             bill_date = order.offline_bill.created_at
         except Exception:
             bill_date = order.created_at
-        _return_window = bill_date + timedelta(days=2)
+        from apps.billing.models import BillingSettings
+        _return_window = bill_date + timedelta(days=BillingSettings.get_return_days())
     else:
         _return_window = None  # set later when order is marked delivered
 

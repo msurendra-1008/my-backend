@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import DiscountCode, OfflineBill, OfflineReturn
+from .models import DiscountCode, OfflineBill, OfflineReturn, BillingSettings
 
 
 class DiscountCodeSerializer(serializers.ModelSerializer):
@@ -88,3 +88,36 @@ class OfflineReturnSerializer(serializers.ModelSerializer):
             'items', 'total_refund', 'bill_photo',
             'review_notes', 'created_at',
         ]
+
+
+class BillingSettingsSerializer(serializers.ModelSerializer):
+    updated_by_name = serializers.SerializerMethodField()
+    effective_days  = serializers.SerializerMethodField()
+
+    class Meta:
+        model  = BillingSettings
+        fields = [
+            'id',
+            'return_window_enabled',
+            'return_window_days',
+            'effective_days',
+            'updated_at',
+            'updated_by_name',
+        ]
+
+    def get_updated_by_name(self, obj):
+        return obj.updated_by.full_name if obj.updated_by else None
+
+    def get_effective_days(self, obj):
+        return BillingSettings.get_return_days()
+
+
+class UpdateBillingSettingsSerializer(serializers.Serializer):
+    return_window_enabled = serializers.BooleanField()
+    return_window_days    = serializers.IntegerField(min_value=1, max_value=30)
+
+    def validate(self, data):
+        if data.get('return_window_enabled') and data.get('return_window_days', 0) < 1:
+            raise serializers.ValidationError(
+                'return_window_days must be at least 1 when enabled')
+        return data

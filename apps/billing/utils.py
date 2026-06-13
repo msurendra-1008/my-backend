@@ -203,9 +203,10 @@ def create_offline_bill(data, billed_by):
             from apps.commissions.models import CommissionBreakup
             for oi in order.items.all():
                 create_commission_breakup(oi)
-            # Offline orders are delivered immediately — set 2-day return window now
+            # Offline orders are delivered immediately — set return window now
+            from apps.billing.models import BillingSettings
             CommissionBreakup.objects.filter(order_item__order=order).update(
-                return_window_expires=timezone.now() + timedelta(days=2)
+                return_window_expires=timezone.now() + timedelta(days=BillingSettings.get_return_days())
             )
         except Exception as e:
             logger.error('Commission failed for %s: %s', order.order_number, e)

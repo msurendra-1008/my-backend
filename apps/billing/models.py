@@ -114,3 +114,47 @@ class OfflineReturn(models.Model):
 
     def __str__(self):
         return f'Return for {self.bill.bill_number}'
+
+
+class BillingSettings(models.Model):
+    """Singleton — one record only."""
+
+    return_window_enabled = models.BooleanField(
+        default=False,
+        help_text='If OFF uses default 2 days',
+    )
+    return_window_days = models.PositiveIntegerField(
+        default=2,
+        help_text='Custom return window in days',
+    )
+    updated_at = models.DateTimeField(auto_now=True)
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True, blank=True,
+        on_delete=models.SET_NULL,
+    )
+
+    class Meta:
+        verbose_name = 'Billing Settings'
+
+    def save(self, *args, **kwargs):
+        self.__class__.objects.exclude(pk=self.pk).delete()
+        super().save(*args, **kwargs)
+
+    @classmethod
+    def get(cls):
+        obj, _ = cls.objects.get_or_create(defaults={
+            'return_window_enabled': False,
+            'return_window_days':    2,
+        })
+        return obj
+
+    @classmethod
+    def get_return_days(cls):
+        s = cls.get()
+        return s.return_window_days if s.return_window_enabled else 2
+
+    def __str__(self):
+        if self.return_window_enabled:
+            return f'Return window: {self.return_window_days} days'
+        return 'Return window: 2 days (default)'
