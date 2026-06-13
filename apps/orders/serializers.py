@@ -196,6 +196,7 @@ class OrderListSerializer(serializers.ModelSerializer):
             "amount_payable", "wallet_used", "razorpay_amount",
             "item_count", "first_item_name",
             "customer_name", "customer_mobile",
+            "is_offline",
             "created_at",
         ]
 
@@ -220,9 +221,11 @@ class OrderListSerializer(serializers.ModelSerializer):
 
 
 class OrderDetailSerializer(serializers.ModelSerializer):
-    items = OrderItemSerializer(many=True, read_only=True)
-    customer_name   = serializers.SerializerMethodField()
-    customer_mobile = serializers.SerializerMethodField()
+    items               = OrderItemSerializer(many=True, read_only=True)
+    customer_name       = serializers.SerializerMethodField()
+    customer_mobile     = serializers.SerializerMethodField()
+    offline_bill_number = serializers.SerializerMethodField()
+    billed_by_name      = serializers.SerializerMethodField()
 
     class Meta:
         model  = Order
@@ -235,6 +238,7 @@ class OrderDetailSerializer(serializers.ModelSerializer):
             "address_city", "address_state", "address_pincode",
             "tracking_number",
             "is_satisfied", "satisfied_at",
+            "is_offline", "offline_bill_number", "billed_by_name",
             "customer_name", "customer_mobile",
             "items", "created_at", "updated_at",
         ]
@@ -244,6 +248,18 @@ class OrderDetailSerializer(serializers.ModelSerializer):
 
     def get_customer_mobile(self, obj):
         return (obj.user.mobile or "") if obj.user else obj.address_phone
+
+    def get_offline_bill_number(self, obj):
+        try:
+            return obj.offline_bill.bill_number
+        except Exception:
+            return None
+
+    def get_billed_by_name(self, obj):
+        try:
+            return obj.offline_bill.billed_by.full_name or ''
+        except Exception:
+            return None
 
 
 class AdminOrderUpdateSerializer(serializers.ModelSerializer):

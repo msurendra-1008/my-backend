@@ -37,6 +37,7 @@ def record_order_received(order):
     from apps.company_wallet.models import GSTLedgerEntry
 
     wallet = _get_wallet()
+    prefix = '[OFFLINE] ' if getattr(order, 'is_offline', False) else ''
 
     amount = Decimal(str(order.amount_payable or 0))
     if amount > 0:
@@ -44,7 +45,7 @@ def record_order_received(order):
             wallet,
             tx_type     = 'order_received',
             amount      = amount,
-            description = f'Order {order.order_number} received',
+            description = f'{prefix}Order {order.order_number} received',
             order       = order,
         )
 
