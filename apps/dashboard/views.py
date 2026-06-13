@@ -72,6 +72,13 @@ class DashboardStatsView(APIView):
         upa_revenue = upa_orders.aggregate(t=Sum('amount_payable'))['t'] or 0
         reg_revenue = reg_orders.aggregate(t=Sum('amount_payable'))['t'] or 0
 
+        offline_orders_qs = orders_qs.filter(is_offline=True)
+        online_orders_qs  = orders_qs.filter(is_offline=False)
+        offline_count     = offline_orders_qs.count()
+        offline_revenue   = offline_orders_qs.aggregate(t=Sum('amount_payable'))['t'] or 0
+        online_count      = online_orders_qs.count()
+        online_revenue    = online_orders_qs.aggregate(t=Sum('amount_payable'))['t'] or 0
+
         status_breakdown = {}
         for s in ['pending', 'confirmed', 'packed', 'shipped', 'delivered', 'cancelled']:
             status_breakdown[s] = orders_qs.filter(order_status=s).count()
@@ -295,6 +302,10 @@ class DashboardStatsView(APIView):
                 'upa_revenue':      float(upa_revenue),
                 'regular_count':    reg_orders.count(),
                 'regular_revenue':  float(reg_revenue),
+                'offline_count':    offline_count,
+                'offline_revenue':  float(offline_revenue),
+                'online_count':     online_count,
+                'online_revenue':   float(online_revenue),
                 'status_breakdown': status_breakdown,
             },
             'upa': {
