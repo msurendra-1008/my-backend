@@ -1,4 +1,4 @@
-from rest_framework import status, serializers as s, viewsets
+from rest_framework import status, serializers as s, viewsets, generics
 from rest_framework.decorators import action
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -6,10 +6,11 @@ from rest_framework.response import Response
 from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework_simplejwt.tokens import RefreshToken
 from drf_spectacular.utils import extend_schema, extend_schema_view, inline_serializer
+from django.db.models import Q
 
 from core.mixins import LoginRequiredMixin
 from accounts.models import User
-from .permissions import IsAdmin
+from .permissions import IsAdmin, IsAdminOrEmployee
 from .serializers import (
     AdminLoginSerializer, UPARegisterSerializer, UPALoginSerializer,
     EmployeeRegisterSerializer, EmployeeUpdateSerializer,
@@ -208,3 +209,25 @@ class UPAUserViewSet(LoginRequiredMixin, viewsets.ReadOnlyModelViewSet):
             'standalone': standalone,
             'networked':  total - standalone,
         })
+
+
+class UserSearchView(generics.ListAPIView):
+    """Search all users by name/email/mobile. Admin only. Used for HR employee linking."""
+    permission_classes = [IsAdmin]
+    serializer_class   = EmployeeListSerializer
+    pagination_class   = None
+
+    def get_queryset(self):
+        qs     = User.objects.all().order_by('first_name', 'last_name')
+        search = self.request.query_params.get('search', '').strip()
+        role   = self.request.query_params.get('role', '').strip()
+        if search:
+            qs = qs.filter(
+                Q(first_name__icontains=search) |
+                Q(last_name__icontains=search)  |
+                Q(email__icontains=search)       |
+                Q(mobile__icontains=search)
+            )
+        if role:
+            qs = qs.filter(role=role)
+        return qs[:20]
