@@ -546,8 +546,16 @@ class AdminOrderViewSet(LoginRequiredMixin, viewsets.ModelViewSet):
         ser.is_valid(raise_exception=True)
         ser.save()
 
-        # Sync item statuses (exclude return/exchange flow items)
+        # Auto-assign delivery partner when order is packed
         new_order_status = ser.validated_data.get("order_status")
+        if new_order_status == 'packed':
+            try:
+                from apps.delivery.utils import auto_assign_if_enabled
+                auto_assign_if_enabled(order, assigned_by=request.user)
+            except Exception:
+                pass
+
+        # Sync item statuses (exclude return/exchange flow items)
         if new_order_status:
             items_qs = order.items.exclude(status__in=RETURN_EXCHANGE_STATUSES)
             if new_order_status == "delivered":

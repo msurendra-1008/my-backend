@@ -30,6 +30,7 @@ urlpatterns = [
     path('api/v1/dashboard/stats/', DashboardStatsView.as_view(), name='dashboard-stats'),
     path('api/v1/billing/', include('apps.billing.urls')),
     path('api/v1/hr/', include('apps.payroll.urls')),
+    path('api/v1/delivery/', include('apps.delivery.urls')),
     # Docs
     path('api/schema/', SpectacularAPIView.as_view(), name='schema'),
     path('api/docs/', SpectacularSwaggerView.as_view(url_name='schema'), name='swagger-ui'),
