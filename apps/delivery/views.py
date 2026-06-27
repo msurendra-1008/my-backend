@@ -155,6 +155,36 @@ class DeliveryAssignmentViewSet(LoginRequiredMixin, viewsets.ReadOnlyModelViewSe
         return Response(DeliveryAssignmentSerializer(assignment).data)
 
 
+# ── Admin: unassigned packed orders ───────────────────────────────────────────
+
+class UnassignedOrdersView(LoginRequiredMixin, generics.ListAPIView):
+    """Packed orders that have no active (assigned/picked_up) delivery assignment."""
+    permission_classes = [IsAdmin]
+
+    def list(self, request, *args, **kwargs):
+        orders = (
+            Order.objects
+            .filter(order_status='packed')
+            .exclude(delivery_assignment__status__in=['assigned', 'picked_up'])
+            .prefetch_related('items')
+            .order_by('-created_at')
+        )
+        data = [
+            {
+                'order_id':        str(o.id),
+                'order_number':    o.order_number,
+                'customer_name':   o.address_name,
+                'address_city':    o.address_city,
+                'address_pincode': o.address_pincode,
+                'total_amount':    str(o.amount_payable),
+                'item_count':      o.items.count(),
+                'suggested_partner': None,
+            }
+            for o in orders
+        ]
+        return Response(data)
+
+
 # ── Partner (self) endpoints ──────────────────────────────────────────────────
 
 class PartnerMyAssignmentsView(LoginRequiredMixin, generics.ListAPIView):
