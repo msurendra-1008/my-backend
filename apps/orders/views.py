@@ -4,12 +4,12 @@ from django.db import transaction
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 
-from rest_framework import status, viewsets
+from rest_framework import status, viewsets, serializers as s
 from rest_framework.decorators import action
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.response import Response
 from rest_framework.views import APIView
-from drf_spectacular.utils import extend_schema
+from drf_spectacular.utils import extend_schema, inline_serializer
 
 from core.mixins import LoginRequiredMixin
 from apps.authentication.permissions import IsAdmin, IsAdminOrEmployee, IsUPAUser
@@ -443,6 +443,25 @@ class UserOrderViewSet(LoginRequiredMixin, viewsets.ReadOnlyModelViewSet):
         ctx["request"] = self.request
         return ctx
 
+    @extend_schema(
+        tags=["Orders"],
+        summary="Get delivery OTP for customer's order",
+        responses={200: inline_serializer('DeliveryOTPResponse', fields={
+            'otp':    s.CharField(),
+            'status': s.CharField(),
+        })},
+    )
+    @action(detail=True, methods=["get"], url_path="delivery-otp")
+    def delivery_otp(self, request, pk=None):
+        order = self.get_object()
+        try:
+            assignment = order.delivery_assignment
+            if assignment.status in ('assigned', 'picked_up'):
+                return Response({'otp': assignment.otp, 'status': assignment.status})
+        except Exception:
+            pass
+        return Response({'otp': None, 'status': None})
+
     @action(detail=True, methods=["post"], url_path="mark-satisfied")
     def mark_satisfied(self, request, pk=None):
         order = self.get_object()
@@ -546,8 +565,16 @@ class AdminOrderViewSet(LoginRequiredMixin, viewsets.ModelViewSet):
         ser.is_valid(raise_exception=True)
         ser.save()
 
-        # Sync item statuses (exclude return/exchange flow items)
+        # Auto-assign delivery partner when order is packed
         new_order_status = ser.validated_data.get("order_status")
+        if new_order_status == 'packed':
+            try:
+                from apps.delivery.utils import auto_assign_if_enabled
+                auto_assign_if_enabled(order, assigned_by=request.user)
+            except Exception:
+                pass
+
+        # Sync item statuses (exclude return/exchange flow items)
         if new_order_status:
             items_qs = order.items.exclude(status__in=RETURN_EXCHANGE_STATUSES)
             if new_order_status == "delivered":

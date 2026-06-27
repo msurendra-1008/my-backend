@@ -20,11 +20,29 @@ class SalaryStructureInline(admin.StackedInline):
 
 @admin.register(EmployeeProfile)
 class EmployeeProfileAdmin(admin.ModelAdmin):
-    list_display   = ('employee_code', 'user', 'department', 'designation', 'employment_type', 'is_active')
-    list_filter    = ('department', 'employment_type', 'is_active')
+    list_display   = ('employee_code', 'user', 'department', 'designation', 'employment_type', 'is_active', 'needs_system_access')
+    list_filter    = ('department', 'employment_type', 'is_active', 'needs_system_access')
     search_fields  = ('employee_code', 'user__first_name', 'user__last_name', 'user__email')
     inlines        = [SalaryStructureInline]
     raw_id_fields  = ('user',)
+    fieldsets = (
+        (None, {
+            'fields': ('user', 'employee_code', 'department', 'designation', 'employment_type', 'date_of_joining', 'is_active'),
+        }),
+        ('Bank Details', {
+            'fields': ('bank_name', 'bank_account', 'bank_ifsc'),
+        }),
+        ('System Access', {
+            'fields': ('needs_system_access',),
+        }),
+        ('Module Permissions', {
+            'fields': (
+                'can_manage_orders', 'can_manage_products', 'can_manage_billing',
+                'can_view_reports', 'can_manage_returns', 'can_manage_warehouse',
+                'can_manage_vendors', 'can_manage_tenders', 'can_manage_procurement',
+            ),
+        }),
+    )
 
 
 @admin.register(PayrollMonth)
