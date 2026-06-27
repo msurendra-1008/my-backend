@@ -39,7 +39,11 @@ class EmployeeProfileSerializer(serializers.ModelSerializer):
             'employee_code', 'department', 'department_name', 'designation',
             'employment_type', 'date_of_joining',
             'bank_name', 'bank_account', 'bank_ifsc',
-            'is_active', 'salary_structure', 'created_at', 'updated_at',
+            'is_active', 'needs_system_access',
+            'can_manage_orders', 'can_manage_products', 'can_manage_billing',
+            'can_view_reports', 'can_manage_returns', 'can_manage_warehouse',
+            'can_manage_vendors', 'can_manage_tenders', 'can_manage_procurement',
+            'salary_structure', 'created_at', 'updated_at',
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']
 
@@ -66,6 +70,10 @@ class CreateEmployeeProfileSerializer(serializers.ModelSerializer):
             'user', 'employee_code', 'department', 'designation',
             'employment_type', 'date_of_joining',
             'bank_name', 'bank_account', 'bank_ifsc',
+            'needs_system_access',
+            'can_manage_orders', 'can_manage_products', 'can_manage_billing',
+            'can_view_reports', 'can_manage_returns', 'can_manage_warehouse',
+            'can_manage_vendors', 'can_manage_tenders', 'can_manage_procurement',
         ]
 
     def validate_user(self, value):
@@ -81,6 +89,10 @@ class UpdateEmployeeProfileSerializer(serializers.ModelSerializer):
             'employee_code', 'department', 'designation',
             'employment_type', 'date_of_joining',
             'bank_name', 'bank_account', 'bank_ifsc', 'is_active',
+            'needs_system_access',
+            'can_manage_orders', 'can_manage_products', 'can_manage_billing',
+            'can_view_reports', 'can_manage_returns', 'can_manage_warehouse',
+            'can_manage_vendors', 'can_manage_tenders', 'can_manage_procurement',
         ]
 
 
