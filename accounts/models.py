@@ -19,11 +19,12 @@ class UserManager(BaseUserManager):
 
 class User(AbstractBaseUser, PermissionsMixin):
     ROLE_CHOICES = [
-        ('superadmin', 'Super Admin'),
-        ('admin', 'Admin'),
-        ('employee', 'Employee'),
-        ('upa_user', 'UPA User'),
-        ('vendor', 'Vendor'),
+        ('superadmin',       'Super Admin'),
+        ('admin',            'Admin'),
+        ('employee',         'Employee'),
+        ('upa_user',         'UPA User'),
+        ('vendor',           'Vendor'),
+        ('delivery_partner', 'Delivery Partner'),
     ]
 
     id          = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
