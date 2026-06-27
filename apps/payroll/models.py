@@ -38,9 +38,19 @@ class EmployeeProfile(models.Model):
     bank_name       = models.CharField(max_length=100, blank=True)
     bank_account    = models.CharField(max_length=30, blank=True)
     bank_ifsc       = models.CharField(max_length=15, blank=True)
-    is_active       = models.BooleanField(default=True)
-    created_at      = models.DateTimeField(auto_now_add=True)
-    updated_at      = models.DateTimeField(auto_now=True)
+    is_active              = models.BooleanField(default=True)
+    needs_system_access    = models.BooleanField(default=False, help_text="True = can log in to the system. False = payroll only, no login needed.")
+    can_manage_orders      = models.BooleanField(default=False)
+    can_manage_products    = models.BooleanField(default=False)
+    can_manage_billing     = models.BooleanField(default=False)
+    can_view_reports       = models.BooleanField(default=False)
+    can_manage_returns     = models.BooleanField(default=False)
+    can_manage_warehouse   = models.BooleanField(default=False)
+    can_manage_vendors     = models.BooleanField(default=False)
+    can_manage_tenders     = models.BooleanField(default=False)
+    can_manage_procurement = models.BooleanField(default=False)
+    created_at             = models.DateTimeField(auto_now_add=True)
+    updated_at             = models.DateTimeField(auto_now=True)
 
     def __str__(self):
         return f'{self.user.full_name} ({self.employee_code})'
