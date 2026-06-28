@@ -47,7 +47,7 @@ class DeliveryPartnerSerializer(serializers.ModelSerializer):
 class DeliverySettingsSerializer(serializers.ModelSerializer):
     class Meta:
         model  = DeliverySettings
-        fields = ['auto_assign', 'assignment_mode', 'updated_at']
+        fields = ['auto_assign', 'assignment_mode', 'default_proof_type', 'max_orders_per_partner', 'updated_at']
         read_only_fields = ['updated_at']
 
 
