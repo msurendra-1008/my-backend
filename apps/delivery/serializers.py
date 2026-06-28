@@ -114,10 +114,10 @@ class PartnerAssignmentSerializer(serializers.ModelSerializer):
         model  = DeliveryAssignment
         fields = [
             'id', 'order_number', 'customer_name', 'customer_phone', 'delivery_address',
-            'otp', 'status', 'assigned_at', 'picked_up_at', 'delivered_at',
+            'status', 'assigned_at', 'picked_up_at', 'delivered_at',
             'proof_image', 'failure_reason', 'notes', 'logs',
         ]
-        read_only_fields = ['id', 'otp', 'assigned_at']
+        read_only_fields = ['id', 'assigned_at']
 
     def get_order_number(self, obj):
         return obj.order.order_number
