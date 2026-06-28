@@ -57,13 +57,22 @@ class DeliveryPartner(models.Model):
 
 class DeliverySettings(models.Model):
     ASSIGNMENT_MODE_CHOICES = [
-        ('zone_match', 'Zone Match'),
-        ('manual',     'Manual'),
+        ('manual',    "Manual — I'll assign every order myself"),
+        ('suggested', 'Suggested — System suggests, I confirm'),
+        ('automatic', 'Automatic — System assigns instantly'),
     ]
 
-    auto_assign     = models.BooleanField(default=True)
-    assignment_mode = models.CharField(max_length=20, choices=ASSIGNMENT_MODE_CHOICES, default='zone_match')
-    updated_by      = models.ForeignKey(
+    PROOF_TYPE_CHOICES = [
+        ('photo',  'Photo only'),
+        ('otp',    'OTP only'),
+        ('either', 'Either'),
+    ]
+
+    auto_assign              = models.BooleanField(default=True)
+    assignment_mode          = models.CharField(max_length=20, choices=ASSIGNMENT_MODE_CHOICES, default='manual')
+    default_proof_type       = models.CharField(max_length=10, choices=PROOF_TYPE_CHOICES, default='either')
+    max_orders_per_partner   = models.PositiveIntegerField(default=8)
+    updated_by               = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
         null=True, blank=True,

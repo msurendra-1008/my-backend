@@ -240,6 +240,16 @@ class PartnerUpdateStatusView(LoginRequiredMixin, generics.UpdateAPIView):
         if new_status == 'delivered' and assignment.status != 'picked_up':
             return Response({'detail': 'Must pick up before marking delivered.'}, status=400)
 
+        if new_status == 'delivered':
+            proof_type = request.data.get('proof_type', '')
+            if proof_type == 'otp':
+                otp_input = request.data.get('otp_input', '').strip()
+                if otp_input != assignment.otp:
+                    return Response(
+                        {'detail': 'Incorrect OTP. Please ask the customer for the correct code.'},
+                        status=400,
+                    )
+
         assignment = update_delivery_status(
             assignment, new_status,
             updated_by=request.user,
