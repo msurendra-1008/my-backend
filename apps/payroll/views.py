@@ -57,14 +57,14 @@ class EmployeeProfileViewSet(viewsets.ModelViewSet):
         if dept:
             qs = qs.filter(department_id=dept)
         if search:
+            from django.db.models import Q
             qs = qs.filter(
-                employee_code__icontains=search
-            ) | qs.filter(
-                user__first_name__icontains=search
-            ) | qs.filter(
-                user__last_name__icontains=search
-            ) | qs.filter(
-                user__email__icontains=search
+                Q(employee_code__icontains=search) |
+                Q(designation__icontains=search) |
+                Q(user__first_name__icontains=search) |
+                Q(user__last_name__icontains=search) |
+                Q(user__email__icontains=search) |
+                Q(user__mobile__icontains=search)
             )
         if active is not None:
             qs = qs.filter(is_active=active.lower() == 'true')
