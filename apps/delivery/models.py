@@ -4,6 +4,7 @@ import string
 
 from django.conf import settings
 from django.db import models
+from django.utils import timezone
 
 from apps.orders.models import Order
 
@@ -47,12 +48,43 @@ class DeliveryPartner(models.Model):
     vehicle_type   = models.CharField(max_length=20, choices=VEHICLE_CHOICES, default='bike')
     vehicle_number = models.CharField(max_length=20, blank=True)
     zones          = models.ManyToManyField(DeliveryZone, blank=True, related_name='partners')
-    is_active      = models.BooleanField(default=True)
-    created_at     = models.DateTimeField(auto_now_add=True)
-    updated_at     = models.DateTimeField(auto_now=True)
+    is_active        = models.BooleanField(default=True)
+    is_on_duty       = models.BooleanField(default=False)
+    duty_started_at  = models.DateTimeField(null=True, blank=True)
+    created_at       = models.DateTimeField(auto_now_add=True)
+    updated_at       = models.DateTimeField(auto_now=True)
 
     def __str__(self):
         return self.user.full_name
+
+
+class DutyLog(models.Model):
+    STATUS_CHOICES = [
+        ('on_duty',  'On Duty'),
+        ('off_duty', 'Off Duty'),
+    ]
+
+    id        = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    partner   = models.ForeignKey(
+        DeliveryPartner, on_delete=models.CASCADE, related_name='duty_logs'
+    )
+    status    = models.CharField(max_length=10, choices=STATUS_CHOICES)
+    timestamp = models.DateTimeField(default=timezone.now)
+    date      = models.DateField()
+
+    class Meta:
+        ordering = ['timestamp']
+        indexes  = [
+            models.Index(fields=['partner', 'date']),
+        ]
+
+    def save(self, *args, **kwargs):
+        if not self.date:
+            self.date = self.timestamp.date()
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f'{self.partner.user.full_name} — {self.status} at {self.timestamp:%Y-%m-%d %H:%M}'
 
 
 class DeliverySettings(models.Model):

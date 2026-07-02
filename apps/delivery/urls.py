@@ -5,6 +5,8 @@ from .views import (
     DeliverySettingsView, DeliveryAssignmentViewSet,
     UnassignedOrdersView,
     PartnerMyAssignmentsView, PartnerUpdateStatusView,
+    PartnerToggleDutyView, PartnerDutyStatusView, PartnerDutyLedgerView,
+    AdminPartnerDutyLedgerView, AdminPartnerDutyReportView,
 )
 
 router = DefaultRouter()
@@ -18,4 +20,11 @@ urlpatterns = [
     path('admin/unassigned/', UnassignedOrdersView.as_view(), name='delivery-unassigned'),
     path('my-assignments/', PartnerMyAssignmentsView.as_view(), name='partner-assignments'),
     path('my-assignments/<uuid:pk>/update-status/', PartnerUpdateStatusView.as_view(), name='partner-update-status'),
+    # Duty — partner
+    path('my-duty/toggle/',  PartnerToggleDutyView.as_view(),  name='partner-duty-toggle'),
+    path('my-duty/status/',  PartnerDutyStatusView.as_view(),  name='partner-duty-status'),
+    path('my-duty/ledger/',  PartnerDutyLedgerView.as_view(),  name='partner-duty-ledger'),
+    # Duty — admin
+    path('admin/partners/<uuid:partner_id>/duty-ledger/', AdminPartnerDutyLedgerView.as_view(), name='admin-partner-duty-ledger'),
+    path('admin/partners/<uuid:partner_id>/duty-report/', AdminPartnerDutyReportView.as_view(), name='admin-partner-duty-report'),
 ]

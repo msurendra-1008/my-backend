@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import DeliveryZone, DeliveryPartner, DeliverySettings, DeliveryAssignment, DeliveryStatusLog
+from .models import DeliveryZone, DeliveryPartner, DeliverySettings, DeliveryAssignment, DeliveryStatusLog, DutyLog
 
 
 class DeliveryZoneSerializer(serializers.ModelSerializer):
@@ -27,9 +27,13 @@ class DeliveryPartnerSerializer(serializers.ModelSerializer):
             'id', 'user', 'full_name', 'email', 'mobile',
             'vehicle_type', 'vehicle_number',
             'zones', 'zone_ids',
-            'is_active', 'active_assignments', 'created_at',
+            'is_active', 'is_on_duty', 'duty_started_at',
+            'active_assignments', 'created_at',
         ]
-        read_only_fields = ['id', 'created_at', 'full_name', 'email', 'mobile', 'zones', 'active_assignments']
+        read_only_fields = [
+            'id', 'created_at', 'full_name', 'email', 'mobile',
+            'zones', 'active_assignments', 'is_on_duty', 'duty_started_at',
+        ]
 
     def get_full_name(self, obj):
         return obj.user.full_name
@@ -131,3 +135,10 @@ class PartnerAssignmentSerializer(serializers.ModelSerializer):
     def get_delivery_address(self, obj):
         o = obj.order
         return f'{o.address_line}, {o.address_city}, {o.address_state} - {o.address_pincode}'
+
+
+class DutyLogSerializer(serializers.ModelSerializer):
+    class Meta:
+        model  = DutyLog
+        fields = ['id', 'status', 'timestamp', 'date']
+        read_only_fields = ['id', 'timestamp', 'date']
