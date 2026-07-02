@@ -1,8 +1,10 @@
+from django.http import HttpResponse
 from rest_framework import status, viewsets, generics, serializers as s
 from rest_framework.decorators import action
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.views import APIView
 from drf_spectacular.utils import extend_schema, extend_schema_view, inline_serializer
 
 from core.mixins import LoginRequiredMixin
@@ -13,12 +15,13 @@ from .permissions import IsDeliveryPartner
 from .serializers import (
     DeliveryZoneSerializer, DeliveryPartnerSerializer,
     DeliverySettingsSerializer, DeliveryAssignmentSerializer,
-    PartnerAssignmentSerializer,
+    PartnerAssignmentSerializer, DutyLogSerializer,
 )
 from .utils import (
     find_eligible_partners, assign_order_to_partner,
     auto_assign_if_enabled, update_delivery_status,
 )
+from .duty_utils import toggle_duty, get_monthly_ledger, generate_monthly_report_html
 
 
 # ── Zones ─────────────────────────────────────────────────────────────────────
@@ -258,3 +261,120 @@ class PartnerUpdateStatusView(LoginRequiredMixin, generics.UpdateAPIView):
             failure_reason=failure_reason,
         )
         return Response(PartnerAssignmentSerializer(assignment).data)
+
+
+# ── Duty: Partner endpoints ────────────────────────────────────────────────────
+
+class PartnerToggleDutyView(APIView):
+    """Partner toggles on-duty / off-duty."""
+    permission_classes = [IsDeliveryPartner]
+
+    @extend_schema(tags=['Delivery'], summary='Toggle duty status (on/off)')
+    def post(self, request):
+        partner = getattr(request.user, 'delivery_partner_profile', None)
+        if not partner:
+            return Response({'detail': 'No delivery partner profile.'}, status=403)
+
+        new_status = request.data.get('status', '')
+        if new_status not in ('on_duty', 'off_duty'):
+            return Response({'detail': "status must be 'on_duty' or 'off_duty'"}, status=400)
+
+        log, error = toggle_duty(partner, new_status)
+        if error:
+            return Response({'detail': error}, status=400)
+
+        return Response({
+            'is_on_duty':      partner.is_on_duty,
+            'duty_started_at': partner.duty_started_at,
+            'log':             DutyLogSerializer(log).data,
+        })
+
+
+class PartnerDutyStatusView(APIView):
+    """Partner checks current duty status."""
+    permission_classes = [IsDeliveryPartner]
+
+    @extend_schema(tags=['Delivery'], summary='Get current duty status')
+    def get(self, request):
+        partner = getattr(request.user, 'delivery_partner_profile', None)
+        if not partner:
+            return Response({'detail': 'No delivery partner profile.'}, status=403)
+
+        return Response({
+            'is_on_duty':      partner.is_on_duty,
+            'duty_started_at': partner.duty_started_at,
+        })
+
+
+class PartnerDutyLedgerView(APIView):
+    """Partner views their own monthly duty ledger."""
+    permission_classes = [IsDeliveryPartner]
+
+    @extend_schema(tags=['Delivery'], summary='Get own monthly duty ledger')
+    def get(self, request):
+        from django.utils import timezone as tz
+        partner = getattr(request.user, 'delivery_partner_profile', None)
+        if not partner:
+            return Response({'detail': 'No delivery partner profile.'}, status=403)
+
+        today = tz.localdate()
+        try:
+            year  = int(request.query_params.get('year',  today.year))
+            month = int(request.query_params.get('month', today.month))
+        except (TypeError, ValueError):
+            return Response({'detail': 'year and month must be integers'}, status=400)
+        if not (1 <= month <= 12):
+            return Response({'detail': 'month must be 1–12'}, status=400)
+
+        return Response(get_monthly_ledger(partner, year, month))
+
+
+# ── Duty: Admin endpoints ──────────────────────────────────────────────────────
+
+class AdminPartnerDutyLedgerView(APIView):
+    """Admin views any partner's monthly duty ledger."""
+    permission_classes = [IsAdmin]
+
+    @extend_schema(tags=['Delivery'], summary='Admin: get partner monthly duty ledger')
+    def get(self, request, partner_id):
+        from django.utils import timezone as tz
+        try:
+            partner = DeliveryPartner.objects.select_related('user').get(pk=partner_id)
+        except DeliveryPartner.DoesNotExist:
+            return Response({'detail': 'Partner not found.'}, status=404)
+
+        today = tz.localdate()
+        try:
+            year  = int(request.query_params.get('year',  today.year))
+            month = int(request.query_params.get('month', today.month))
+        except (TypeError, ValueError):
+            return Response({'detail': 'year and month must be integers'}, status=400)
+        if not (1 <= month <= 12):
+            return Response({'detail': 'month must be 1–12'}, status=400)
+
+        return Response(get_monthly_ledger(partner, year, month))
+
+
+class AdminPartnerDutyReportView(APIView):
+    """Admin downloads an HTML salary-slip-style duty report for a partner."""
+    permission_classes = [IsAdmin]
+
+    @extend_schema(tags=['Delivery'], summary='Admin: get partner duty report (HTML)')
+    def get(self, request, partner_id):
+        from django.utils import timezone as tz
+        try:
+            partner = DeliveryPartner.objects.select_related('user').get(pk=partner_id)
+        except DeliveryPartner.DoesNotExist:
+            return Response({'detail': 'Partner not found.'}, status=404)
+
+        today = tz.localdate()
+        try:
+            year  = int(request.query_params.get('year',  today.year))
+            month = int(request.query_params.get('month', today.month))
+        except (TypeError, ValueError):
+            return Response({'detail': 'year and month must be integers'}, status=400)
+        if not (1 <= month <= 12):
+            return Response({'detail': 'month must be 1–12'}, status=400)
+
+        html = generate_monthly_report_html(partner, year, month)
+        return HttpResponse(html, content_type='text/html')
