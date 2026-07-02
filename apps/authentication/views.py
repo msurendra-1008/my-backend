@@ -234,19 +234,26 @@ class UserSearchView(generics.ListAPIView):
 
 
 class QuickUserCreateView(generics.CreateAPIView):
-    """Create a minimal user account for HR linking. Admin only. Auto-generates password."""
+    """Create a user account for HR linking. Admin only. Accepts password and role."""
     permission_classes = [IsAdmin]
 
+    VALID_ROLES = ['employee', 'delivery_partner', 'admin']
+
     def create(self, request, *args, **kwargs):
-        import secrets
-        name   = (request.data.get('name') or '').strip()
-        email  = (request.data.get('email') or '').strip() or None
-        mobile = (request.data.get('mobile') or '').strip() or None
+        name     = (request.data.get('name') or '').strip()
+        email    = (request.data.get('email') or '').strip() or None
+        mobile   = (request.data.get('mobile') or '').strip() or None
+        password = (request.data.get('password') or '').strip()
+        role     = (request.data.get('role') or 'employee').strip()
 
         if not name:
             return Response({'error': 'name is required'}, status=400)
         if not email and not mobile:
             return Response({'error': 'email or mobile is required'}, status=400)
+        if not password or len(password) < 8:
+            return Response({'error': 'Password must be at least 8 characters'}, status=400)
+        if role not in self.VALID_ROLES:
+            return Response({'error': f'role must be one of: {", ".join(self.VALID_ROLES)}'}, status=400)
         if email and User.objects.filter(email=email).exists():
             return Response({'email': ['Email already in use.']}, status=400)
         if mobile and User.objects.filter(mobile=mobile).exists():
@@ -254,14 +261,11 @@ class QuickUserCreateView(generics.CreateAPIView):
 
         first_name, *rest = name.split(' ', 1)
         last_name = rest[0] if rest else ''
-        kwargs_create = {'first_name': first_name, 'last_name': last_name, 'role': 'employee'}
+        kwargs_create = {'first_name': first_name, 'last_name': last_name, 'role': role}
         if email:
             kwargs_create['email'] = email
         if mobile:
             kwargs_create['mobile'] = mobile
 
-        user = User.objects.create_user(
-            password=secrets.token_urlsafe(12),
-            **kwargs_create,
-        )
+        user = User.objects.create_user(password=password, **kwargs_create)
         return Response(EmployeeListSerializer(user, context={'request': request}).data, status=201)
