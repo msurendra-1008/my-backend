@@ -2,11 +2,14 @@ import uuid
 import random
 import string
 
+import pytz
 from django.conf import settings
 from django.db import models
 from django.utils import timezone
 
 from apps.orders.models import Order
+
+IST = pytz.timezone('Asia/Kolkata')
 
 
 def _gen_otp():
@@ -79,8 +82,10 @@ class DutyLog(models.Model):
         ]
 
     def save(self, *args, **kwargs):
-        if not self.date:
-            self.date = self.timestamp.date()
+        if self.timestamp:
+            ts = self.timestamp
+            ist_ts = ts.astimezone(IST) if timezone.is_aware(ts) else IST.localize(ts)
+            self.date = ist_ts.date()
         super().save(*args, **kwargs)
 
     def __str__(self):
