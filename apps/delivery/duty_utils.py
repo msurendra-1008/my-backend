@@ -76,6 +76,10 @@ def calculate_daily_hours(partner, target_date):
     Calculate duty sessions for a partner on a given IST date.
     Returns a dict with sessions, total_hours, first_in, last_out, etc.
     Sessions contain raw datetime objects; callers format for display.
+
+    Past dates with an unclosed on_duty are capped at 23:59:59 IST of
+    that date (partner forgot to toggle off). A single day can never
+    exceed 24h. 'Ongoing' only applies to today.
     """
     from .models import DutyLog
 
@@ -89,6 +93,9 @@ def calculate_daily_hours(partner, target_date):
     last_out      = None
     pending_start = None
 
+    today_ist = timezone.now().astimezone(IST).date()
+    is_today  = (target_date == today_ist)
+
     for log in logs:
         if log.status == 'on_duty':
             pending_start = log.timestamp
@@ -97,27 +104,52 @@ def calculate_daily_hours(partner, target_date):
         elif log.status == 'off_duty' and pending_start is not None:
             duration_secs = (log.timestamp - pending_start).total_seconds()
             sessions.append({
-                'start':   pending_start,
-                'end':     log.timestamp,
-                'hours':   round(duration_secs / 3600, 2),
-                'ongoing': False,
+                'start':      pending_start,
+                'end':        log.timestamp,
+                'hours':      round(duration_secs / 3600, 2),
+                'ongoing':    False,
+                'auto_closed': False,
             })
             total_seconds += duration_secs
             last_out       = log.timestamp
             pending_start  = None
 
-    # Ongoing session — count to now regardless of date (past unclosed = visible)
     is_currently_on_duty = pending_start is not None
+
     if is_currently_on_duty:
-        now           = timezone.now()
-        duration_secs = (now - pending_start).total_seconds()
-        sessions.append({
-            'start':   pending_start,
-            'end':     None,
-            'hours':   round(duration_secs / 3600, 2),
-            'ongoing': True,
-        })
-        total_seconds += duration_secs
+        if is_today:
+            end_time      = timezone.now()
+            duration_secs = (end_time - pending_start).total_seconds()
+            sessions.append({
+                'start':      pending_start,
+                'end':        None,
+                'hours':      round(duration_secs / 3600, 2),
+                'ongoing':    True,
+                'auto_closed': False,
+            })
+            total_seconds += duration_secs
+        else:
+            # Partner forgot to toggle off — cap at 23:59:59 IST of that date
+            day_end_ist = IST.localize(datetime(
+                target_date.year, target_date.month, target_date.day, 23, 59, 59,
+            ))
+            day_end_utc = day_end_ist.astimezone(pytz.utc)
+
+            if pending_start < day_end_utc:
+                end_time      = min(day_end_utc, timezone.now())
+                duration_secs = (end_time - pending_start).total_seconds()
+                sessions.append({
+                    'start':      pending_start,
+                    'end':        day_end_utc,
+                    'hours':      round(duration_secs / 3600, 2),
+                    'ongoing':    False,
+                    'auto_closed': True,
+                })
+                total_seconds += duration_secs
+                last_out       = day_end_utc
+
+            # Past-date unclosed session is NOT "currently on duty"
+            is_currently_on_duty = False
 
     return {
         'date':                 target_date,
@@ -203,13 +235,19 @@ def get_monthly_ledger(partner, year, month):
         total_failed    += failed
 
         # Serialize sessions with IST display strings
+        today_ist = timezone.now().astimezone(IST).date()
         serialized_sessions = []
         for s in daily['sessions']:
+            if s['ongoing'] and d == today_ist:
+                end_display = 'Ongoing'
+            else:
+                end_display = format_ist_time(s['end'])
             serialized_sessions.append({
                 'start_display': format_ist_time(s['start']),
-                'end_display':   format_ist_time(s['end']) if not s['ongoing'] else 'Ongoing',
+                'end_display':   end_display,
                 'hours':         s['hours'],
                 'ongoing':       s['ongoing'],
+                'auto_closed':   s.get('auto_closed', False),
             })
 
         days_entries.append({
