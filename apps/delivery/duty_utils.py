@@ -1,239 +1,344 @@
+"""
+Duty tracking utilities.
+
+All timestamps are stored as UTC in the database (Django standard).
+The DutyLog.date field stores the IST date (UTC+5:30).
+All display values returned to the frontend are pre-formatted in IST.
+"""
 import calendar
-from datetime import date, timedelta
+import pytz
+from datetime import date, datetime
 
 from django.utils import timezone
 
-from .models import DutyLog
+IST = pytz.timezone('Asia/Kolkata')
 
+
+# ── Timezone helpers ─────────────────────────────────────────────────────────
+
+def to_ist(dt):
+    """Convert any datetime to IST timezone-aware. Returns None if dt is None."""
+    if dt is None:
+        return None
+    return dt.astimezone(IST) if timezone.is_aware(dt) else IST.localize(dt)
+
+
+def format_ist_time(dt):
+    """Format datetime as 12-hour IST time string e.g. '09:00 AM'."""
+    if dt is None:
+        return None
+    return to_ist(dt).strftime('%I:%M %p')
+
+
+def ist_date_range(d):
+    """Return (start_utc, end_utc) bracketing an IST calendar day."""
+    day_start = IST.localize(datetime(d.year, d.month, d.day, 0, 0, 0))
+    day_end   = IST.localize(datetime(d.year, d.month, d.day, 23, 59, 59))
+    return day_start.astimezone(pytz.utc), day_end.astimezone(pytz.utc)
+
+
+# ── Core duty functions ───────────────────────────────────────────────────────
 
 def toggle_duty(partner, new_status):
     """
-    Toggle a partner's duty status.
-    Returns (DutyLog, error_str|None).
-    error_str is set when the request is a no-op (same status).
+    Toggle partner duty status.
+    Raises ValueError if partner is already in the requested status.
+    Returns the created DutyLog.
     """
-    current = 'on_duty' if partner.is_on_duty else 'off_duty'
-    if current == new_status:
-        return None, f'Already {new_status.replace("_", " ")}'
+    from .models import DutyLog
 
-    now = timezone.now()
+    if new_status not in ('on_duty', 'off_duty'):
+        raise ValueError("status must be 'on_duty' or 'off_duty'")
+
+    last_log = DutyLog.objects.filter(partner=partner).order_by('-timestamp').first()
+    if last_log and last_log.status == new_status:
+        raise ValueError(f'Already {new_status.replace("_", " ")}')
+
+    now     = timezone.now()          # UTC aware
+    ist_now = now.astimezone(IST)
+
     log = DutyLog.objects.create(
-        partner=partner,
-        status=new_status,
-        timestamp=now,
-        date=now.date(),
+        partner   = partner,
+        status    = new_status,
+        timestamp = now,
+        date      = ist_now.date(),   # model.save() also computes this, explicit is clear
     )
 
-    if new_status == 'on_duty':
-        partner.is_on_duty = True
-        partner.duty_started_at = now
-    else:
-        partner.is_on_duty = False
-        partner.duty_started_at = None
-
+    partner.is_on_duty      = (new_status == 'on_duty')
+    partner.duty_started_at = now if new_status == 'on_duty' else None
     partner.save(update_fields=['is_on_duty', 'duty_started_at', 'updated_at'])
-    return log, None
+
+    return log
 
 
 def calculate_daily_hours(partner, target_date):
     """
-    Returns total duty seconds for a given date.
-    Handles multiple on/off sessions; ongoing session counted to now().
+    Calculate duty sessions for a partner on a given IST date.
+    Returns a dict with sessions, total_hours, first_in, last_out, etc.
+    Sessions contain raw datetime objects; callers format for display.
     """
+    from .models import DutyLog
+
     logs = list(
         DutyLog.objects.filter(partner=partner, date=target_date).order_by('timestamp')
     )
 
+    sessions      = []
     total_seconds = 0
-    session_start = None
+    first_in      = None
+    last_out      = None
+    pending_start = None
 
     for log in logs:
         if log.status == 'on_duty':
-            session_start = log.timestamp
-        elif log.status == 'off_duty' and session_start is not None:
-            total_seconds += (log.timestamp - session_start).total_seconds()
-            session_start = None
+            pending_start = log.timestamp
+            if first_in is None:
+                first_in = log.timestamp
+        elif log.status == 'off_duty' and pending_start is not None:
+            duration_secs = (log.timestamp - pending_start).total_seconds()
+            sessions.append({
+                'start':   pending_start,
+                'end':     log.timestamp,
+                'hours':   round(duration_secs / 3600, 2),
+                'ongoing': False,
+            })
+            total_seconds += duration_secs
+            last_out       = log.timestamp
+            pending_start  = None
 
-    # Ongoing session — count up to now
-    if session_start is not None:
-        now = timezone.now()
-        if now.date() == target_date:
-            total_seconds += (now - session_start).total_seconds()
+    # Ongoing session — count to now regardless of date (past unclosed = visible)
+    is_currently_on_duty = pending_start is not None
+    if is_currently_on_duty:
+        now           = timezone.now()
+        duration_secs = (now - pending_start).total_seconds()
+        sessions.append({
+            'start':   pending_start,
+            'end':     None,
+            'hours':   round(duration_secs / 3600, 2),
+            'ongoing': True,
+        })
+        total_seconds += duration_secs
 
-    return total_seconds
+    return {
+        'date':                 target_date,
+        'sessions':             sessions,
+        'total_hours':          round(total_seconds / 3600, 2),
+        'session_count':        len(sessions),
+        'first_in':             first_in,
+        'last_out':             last_out,
+        'is_currently_on_duty': is_currently_on_duty,
+    }
 
 
-def _classify_day(seconds):
-    hours = seconds / 3600
+def _classify_day(hours):
     if hours >= 6:
-        return 'full'
+        return 'full_day'
     if hours >= 1:
-        return 'half'
+        return 'half_day'
     return 'absent'
 
 
 def get_monthly_ledger(partner, year, month):
     """
-    Returns a dict with per-day breakdown and aggregate stats for a given month.
+    Returns a full monthly duty ledger for a partner.
+    All display values are pre-formatted in IST.
     """
+    from .models import DeliveryAssignment
+
     _, days_in_month = calendar.monthrange(year, month)
-    today = timezone.localdate()
+    today_ist        = timezone.now().astimezone(IST).date()
 
-    daily = []
-    full_days = half_days = absent_days = 0
-    total_seconds = 0
-
-    for day in range(1, days_in_month + 1):
-        d = date(year, month, day)
-        if d > today:
-            daily.append({'date': d.isoformat(), 'type': 'future', 'hours': None, 'sessions': []})
-            continue
-
-        seconds = calculate_daily_hours(partner, d)
-        day_type = _classify_day(seconds)
-
-        if day_type == 'full':
-            full_days += 1
-        elif day_type == 'half':
-            half_days += 1
-        else:
-            absent_days += 1
-
-        total_seconds += seconds
-
-        logs = list(
-            DutyLog.objects.filter(partner=partner, date=d).order_by('timestamp')
-        )
-        sessions = _build_sessions(logs, d, today)
-
-        daily.append({
-            'date':     d.isoformat(),
-            'type':     day_type,
-            'hours':    round(seconds / 3600, 2),
-            'sessions': sessions,
-        })
-
-    return {
-        'year':          year,
-        'month':         month,
-        'days':          daily,
-        'full_days':     full_days,
-        'half_days':     half_days,
-        'absent_days':   absent_days,
-        'total_hours':   round(total_seconds / 3600, 2),
-    }
-
-
-def _build_sessions(logs, d, today):
-    sessions = []
-    session_start = None
-
-    for log in logs:
-        if log.status == 'on_duty':
-            session_start = log.timestamp
-        elif log.status == 'off_duty' and session_start is not None:
-            duration = (log.timestamp - session_start).total_seconds()
-            sessions.append({
-                'start':    session_start.strftime('%H:%M'),
-                'end':      log.timestamp.strftime('%H:%M'),
-                'duration': round(duration / 3600, 2),
-                'ongoing':  False,
-            })
-            session_start = None
-
-    if session_start is not None:
-        now = timezone.now()
-        if d == today:
-            duration = (now - session_start).total_seconds()
-            sessions.append({
-                'start':    session_start.strftime('%H:%M'),
-                'end':      None,
-                'duration': round(duration / 3600, 2),
-                'ongoing':  True,
-            })
-
-    return sessions
-
-
-def generate_monthly_report_html(partner, year, month):
-    """Returns an HTML string suitable for browser print-to-PDF."""
-    ledger = get_monthly_ledger(partner, year, month)
-    month_name = date(year, month, 1).strftime('%B %Y')
-
+    # Partner identity — gracefully degrade if no payroll profile
+    partner_name = partner.user.full_name
     try:
-        emp_code = partner.user.employee_profile.employee_code
+        emp_code = partner.user.payroll_profile.employee_code
     except Exception:
         emp_code = '—'
 
-    partner_name = partner.user.full_name
+    days_entries = []
+    full_days = half_days = absent_days = days_worked = 0
+    total_seconds_worked = 0.0
+    total_delivered = total_failed = 0
+
+    for day_num in range(1, days_in_month + 1):
+        d = date(year, month, day_num)
+
+        if d > today_ist:
+            days_entries.append({
+                'date':             d.isoformat(),
+                'day_name':         d.strftime('%A'),
+                'status':           'future',
+                'total_hours':      None,
+                'first_in_display': None,
+                'last_out_display': None,
+                'session_count':    0,
+                'sessions':         [],
+            })
+            continue
+
+        daily       = calculate_daily_hours(partner, d)
+        day_status  = _classify_day(daily['total_hours'])
+        day_seconds = daily['total_hours'] * 3600
+
+        if day_status == 'full_day':
+            full_days  += 1
+        elif day_status == 'half_day':
+            half_days  += 1
+        else:
+            absent_days += 1
+
+        if daily['total_hours'] > 0:
+            days_worked    += 1
+            total_seconds_worked += day_seconds
+
+        # Orders on this IST calendar day
+        day_start_utc, day_end_utc = ist_date_range(d)
+        day_assigned = partner.assignments.filter(
+            created_at__gte=day_start_utc,
+            created_at__lte=day_end_utc,
+        )
+        delivered = day_assigned.filter(status='delivered').count()
+        failed    = day_assigned.filter(status='failed').count()
+        total_delivered += delivered
+        total_failed    += failed
+
+        # Serialize sessions with IST display strings
+        serialized_sessions = []
+        for s in daily['sessions']:
+            serialized_sessions.append({
+                'start_display': format_ist_time(s['start']),
+                'end_display':   format_ist_time(s['end']) if not s['ongoing'] else 'Ongoing',
+                'hours':         s['hours'],
+                'ongoing':       s['ongoing'],
+            })
+
+        days_entries.append({
+            'date':             d.isoformat(),
+            'day_name':         d.strftime('%A'),
+            'status':           day_status,
+            'total_hours':      daily['total_hours'],
+            'first_in_display': format_ist_time(daily['first_in']),
+            'last_out_display': format_ist_time(daily['last_out']),
+            'session_count':    daily['session_count'],
+            'sessions':         serialized_sessions,
+            'orders_delivered': delivered,
+            'orders_failed':    failed,
+        })
+
+    total_hours    = round(total_seconds_worked / 3600, 2)
+    avg_hours      = round(total_hours / days_worked, 2) if days_worked > 0 else 0.0
+
+    return {
+        'partner_name':    partner_name,
+        'employee_code':   emp_code,
+        'year':            year,
+        'month':           month,
+        'month_name':      date(year, month, 1).strftime('%B %Y'),
+        'days_in_month':   days_in_month,
+        'days_worked':     days_worked,
+        'full_days':       full_days,
+        'half_days':       half_days,
+        'absent_days':     absent_days,
+        'total_hours':     total_hours,
+        'avg_hours_per_day': avg_hours,
+        'total_delivered': total_delivered,
+        'total_failed':    total_failed,
+        'days':            days_entries,
+        'timezone':        'IST (UTC+5:30)',
+    }
+
+
+def generate_monthly_report_html(partner, year, month):
+    """Returns an HTML string suitable for browser print-to-PDF. All times in IST."""
+    data    = get_monthly_ledger(partner, year, month)
+    now_ist = timezone.now().astimezone(IST)
 
     rows_html = ''
-    for entry in ledger['days']:
-        if entry['type'] == 'future':
+    for entry in data['days']:
+        if entry['status'] == 'future':
             continue
-        badge_color = {'full': '#16a34a', 'half': '#d97706', 'absent': '#dc2626'}.get(entry['type'], '#6b7280')
-        badge_label = entry['type'].capitalize()
-        hours_str = f"{entry['hours']:.2f} h" if entry['hours'] is not None else '—'
+        color_map = {
+            'full_day':  ('#16a34a', 'Full'),
+            'half_day':  ('#d97706', 'Half'),
+            'absent':    ('#dc2626', 'Absent'),
+        }
+        color, label = color_map.get(entry['status'], ('#6b7280', entry['status']))
+        hours_str    = f"{entry['total_hours']:.2f} h" if entry['total_hours'] is not None else '—'
         sessions_str = ', '.join(
-            f"{s['start']}–{s['end'] or 'ongoing'}" for s in entry['sessions']
+            f"{s['start_display']}–{s['end_display']}" for s in entry['sessions']
         ) or '—'
         rows_html += f"""
         <tr>
-          <td>{entry['date']}</td>
-          <td><span style="color:{badge_color};font-weight:600">{badge_label}</span></td>
+          <td>{entry['date']} ({entry['day_name'][:3]})</td>
+          <td>{entry.get('first_in_display') or '—'}</td>
+          <td>{entry.get('last_out_display') or '—'}</td>
+          <td>{entry['session_count']}</td>
           <td>{hours_str}</td>
-          <td style="color:#6b7280;font-size:0.85em">{sessions_str}</td>
+          <td>{entry.get('orders_delivered', 0)}</td>
+          <td>{entry.get('orders_failed', 0)}</td>
+          <td><span style="color:{color};font-weight:600">{label}</span></td>
         </tr>"""
 
     return f"""<!DOCTYPE html>
 <html>
 <head>
   <meta charset="utf-8">
-  <title>Duty Report — {partner_name} — {month_name}</title>
+  <title>Duty Report — {data['partner_name']} — {data['month_name']}</title>
   <style>
     body {{ font-family: Arial, sans-serif; margin: 32px; color: #111; }}
     h1   {{ font-size: 1.4em; margin-bottom: 4px; }}
-    .meta {{ color: #555; font-size: 0.9em; margin-bottom: 24px; }}
-    .stats {{ display: flex; gap: 24px; margin-bottom: 24px; }}
-    .stat  {{ background: #f3f4f6; border-radius: 8px; padding: 12px 20px; text-align: center; }}
-    .stat-val  {{ font-size: 1.6em; font-weight: 700; }}
+    .meta {{ color: #555; font-size: 0.9em; margin-bottom: 16px; }}
+    .stats {{ display: flex; gap: 16px; margin-bottom: 20px; flex-wrap: wrap; }}
+    .stat  {{ background: #f3f4f6; border-radius: 8px; padding: 12px 20px; text-align: center; min-width: 80px; }}
+    .stat-val   {{ font-size: 1.6em; font-weight: 700; }}
     .stat-label {{ font-size: 0.8em; color: #555; }}
-    table  {{ width: 100%; border-collapse: collapse; font-size: 0.92em; }}
-    th, td {{ border: 1px solid #e5e7eb; padding: 8px 12px; text-align: left; }}
+    .tz-note {{ font-size: 0.78em; color: #888; text-align: right; margin-bottom: 6px; }}
+    table  {{ width: 100%; border-collapse: collapse; font-size: 0.88em; }}
+    th, td {{ border: 1px solid #e5e7eb; padding: 7px 10px; text-align: left; }}
     th     {{ background: #f9fafb; font-weight: 600; }}
     tr:nth-child(even) {{ background: #f9fafb; }}
-    @media print {{ body {{ margin: 16px; }} }}
+    .footer {{ margin-top: 40px; display: flex; justify-content: space-between; }}
+    .sign-line {{ border-top: 1px solid #000; width: 160px; margin: 40px auto 4px; }}
+    @media print {{ body {{ margin: 16px; }} button {{ display: none; }} }}
   </style>
 </head>
 <body>
-  <h1>Duty Report</h1>
+  <button onclick="window.print()"
+    style="margin-bottom:12px;padding:8px 20px;background:#333;color:#fff;border:none;cursor:pointer;border-radius:6px;">
+    Print / Save as PDF
+  </button>
+  <h1>Delivery Partner Duty Report</h1>
   <p class="meta">
-    <strong>{partner_name}</strong> &nbsp;|&nbsp; Code: {emp_code}
-    &nbsp;|&nbsp; Period: {month_name}
+    <strong>{data['partner_name']}</strong> &nbsp;|&nbsp; Code: {data['employee_code']}
+    &nbsp;|&nbsp; {data['month_name']}
   </p>
   <div class="stats">
-    <div class="stat">
-      <div class="stat-val" style="color:#16a34a">{ledger['full_days']}</div>
-      <div class="stat-label">Full Days</div>
-    </div>
-    <div class="stat">
-      <div class="stat-val" style="color:#d97706">{ledger['half_days']}</div>
-      <div class="stat-label">Half Days</div>
-    </div>
-    <div class="stat">
-      <div class="stat-val" style="color:#dc2626">{ledger['absent_days']}</div>
-      <div class="stat-label">Absent Days</div>
-    </div>
-    <div class="stat">
-      <div class="stat-val">{ledger['total_hours']:.1f}</div>
-      <div class="stat-label">Total Hours</div>
-    </div>
+    <div class="stat"><div class="stat-val" style="color:#16a34a">{data['full_days']}</div><div class="stat-label">Full Days</div></div>
+    <div class="stat"><div class="stat-val" style="color:#d97706">{data['half_days']}</div><div class="stat-label">Half Days</div></div>
+    <div class="stat"><div class="stat-val" style="color:#dc2626">{data['absent_days']}</div><div class="stat-label">Absent</div></div>
+    <div class="stat"><div class="stat-val">{data['total_hours']:.1f}h</div><div class="stat-label">Total Hours</div></div>
+    <div class="stat"><div class="stat-val">{data['avg_hours_per_day']}h</div><div class="stat-label">Avg/Day</div></div>
+    <div class="stat"><div class="stat-val" style="color:#16a34a">{data['total_delivered']}</div><div class="stat-label">Delivered</div></div>
+    <div class="stat"><div class="stat-val" style="color:#dc2626">{data['total_failed']}</div><div class="stat-label">Failed</div></div>
   </div>
+  <p class="tz-note">All times in IST (UTC+5:30)</p>
   <table>
     <thead>
-      <tr><th>Date</th><th>Status</th><th>Hours</th><th>Sessions</th></tr>
+      <tr>
+        <th>Date</th><th>First In</th><th>Last Out</th>
+        <th>Sessions</th><th>Hours</th>
+        <th>Delivered</th><th>Failed</th><th>Status</th>
+      </tr>
     </thead>
     <tbody>{rows_html}</tbody>
   </table>
+  <p style="margin-top:10px;font-size:0.78em;color:#888;text-align:center;">
+    Full Day ≥ 6h &nbsp;·&nbsp; Half Day 1–5h &nbsp;·&nbsp; Absent = 0h &nbsp;|&nbsp;
+    Generated: {now_ist.strftime('%d %b %Y %I:%M %p IST')}
+  </p>
+  <div class="footer">
+    <div style="text-align:center"><div class="sign-line"></div><div style="font-size:12px;">Partner Signature</div></div>
+    <div style="text-align:center"><div class="sign-line"></div><div style="font-size:12px;">Authorized Signatory</div></div>
+  </div>
 </body>
 </html>"""
