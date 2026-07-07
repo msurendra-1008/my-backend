@@ -276,12 +276,10 @@ class PartnerToggleDutyView(APIView):
             return Response({'detail': 'No delivery partner profile.'}, status=403)
 
         new_status = request.data.get('status', '')
-        if new_status not in ('on_duty', 'off_duty'):
-            return Response({'detail': "status must be 'on_duty' or 'off_duty'"}, status=400)
-
-        log, error = toggle_duty(partner, new_status)
-        if error:
-            return Response({'detail': error}, status=400)
+        try:
+            log = toggle_duty(partner, new_status)
+        except ValueError as e:
+            return Response({'detail': str(e)}, status=400)
 
         return Response({
             'is_on_duty':      partner.is_on_duty,
