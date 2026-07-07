@@ -152,11 +152,18 @@ class TestCalculateDailyHours(TestCase):
         self.assertAlmostEqual(r['total_hours'], 9.0, places=1)
 
     def test_ongoing_session_counted(self):
-        """ON with no OFF = ongoing; hours > 0; session marked ongoing."""
+        """ON with no OFF on today = ongoing; hours > 0; session marked ongoing."""
         from apps.delivery.duty_utils import calculate_daily_hours
 
         self._log('on_duty', 9, 0)
-        r = calculate_daily_hours(self.partner, self.test_date)
+
+        # Freeze "now" to noon on the same date so calculate_daily_hours
+        # treats self.test_date as today and keeps the session ongoing.
+        fake_now = make_utc_from_ist(2026, 7, 4, 12, 0)
+        with patch('apps.delivery.duty_utils.timezone') as mock_tz:
+            mock_tz.now.return_value = fake_now
+            mock_tz.is_aware = timezone.is_aware
+            r = calculate_daily_hours(self.partner, self.test_date)
 
         self.assertTrue(r['is_currently_on_duty'])
         self.assertEqual(r['session_count'], 1)
@@ -225,6 +232,38 @@ class TestCalculateDailyHours(TestCase):
         r = calculate_daily_hours(self.partner, self.test_date)
         self.assertEqual(r['first_in'], on_utc)
         self.assertEqual(r['last_out'], off_utc)
+
+    def test_past_day_ongoing_capped_at_midnight(self):
+        """
+        If partner toggled ON on a past date but never toggled OFF,
+        hours must be capped at 23:59:59 IST of that date — NOT counted
+        up to today. Max possible hours for any single day = ~15h here
+        (09:00 to 23:59 IST).
+        """
+        from apps.delivery.duty_utils import calculate_daily_hours
+        from apps.delivery.models import DutyLog
+
+        past_date = date(2026, 7, 3)
+
+        on_ist = make_utc_from_ist(2026, 7, 3, 9, 0)
+        DutyLog.objects.create(
+            partner   = self.partner,
+            status    = 'on_duty',
+            timestamp = on_ist,
+            date      = past_date,
+        )
+
+        result = calculate_daily_hours(self.partner, past_date)
+
+        # Capped at 23:59:59 IST on Jul 3 → ~15h (09:00 to 23:59)
+        self.assertLessEqual(result['total_hours'], 15.1)
+        self.assertGreater(result['total_hours'], 14.9)
+
+        # Past date must NOT be marked as currently on duty
+        self.assertFalse(result['is_currently_on_duty'])
+
+        # The session should be marked auto_closed
+        self.assertTrue(result['sessions'][0].get('auto_closed', False))
 
 
 # ─── toggle_duty ─────────────────────────────────────────────────────────────
