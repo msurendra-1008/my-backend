@@ -11,11 +11,13 @@ from .attendance_serializers import (
     LeaveBalanceSerializer,
     AttendanceRecordSerializer,
     BulkMarkAttendanceSerializer,
+    LeaveRangeSerializer,
 )
 from .attendance_utils import (
     get_employee_calendar,
     mark_attendance,
     bulk_mark_attendance,
+    mark_leave_range,
     auto_fill_payroll_from_attendance,
     MONTH_NAMES,
 )
@@ -158,6 +160,33 @@ class AttendanceViewSet(viewsets.ModelViewSet):
             marked_by=request.user,
         )
         return Response(results)
+
+    @action(detail=False, methods=['post'], url_path='mark-leave-range')
+    def mark_leave_range_view(self, request):
+        """Mark leave for an employee across a date range. Skips weekends and public holidays."""
+        ser = LeaveRangeSerializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+        d = ser.validated_data
+
+        try:
+            employee = EmployeeProfile.objects.get(id=d['employee_id'])
+        except EmployeeProfile.DoesNotExist:
+            return Response({'error': 'Employee not found.'}, status=404)
+
+        try:
+            result = mark_leave_range(
+                employee         = employee,
+                from_date        = d['from_date'],
+                to_date          = d['to_date'],
+                leave_type       = d['leave_type'],
+                leave_note       = d.get('leave_note', ''),
+                include_weekends = d.get('include_weekends', False),
+                marked_by        = request.user,
+            )
+        except ValueError as e:
+            return Response({'error': str(e)}, status=400)
+
+        return Response(result)
 
     @action(detail=False, methods=['get'], url_path='export')
     def export(self, request):

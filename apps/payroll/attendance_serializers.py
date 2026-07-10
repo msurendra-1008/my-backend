@@ -74,6 +74,25 @@ class AttendanceRecordSerializer(serializers.ModelSerializer):
         return data
 
 
+class LeaveRangeSerializer(serializers.Serializer):
+    employee_id      = serializers.UUIDField()
+    from_date        = serializers.DateField()
+    to_date          = serializers.DateField()
+    leave_type       = serializers.ChoiceField(choices=['casual', 'sick', 'earned', 'unpaid', 'other'])
+    leave_note       = serializers.CharField(required=False, allow_blank=True, default='')
+    include_weekends = serializers.BooleanField(default=False)
+
+    def validate(self, data):
+        if data['from_date'] > data['to_date']:
+            raise serializers.ValidationError('from_date must be before or equal to to_date.')
+
+        delta = (data['to_date'] - data['from_date']).days
+        if delta > 90:
+            raise serializers.ValidationError('Leave range cannot exceed 90 days.')
+
+        return data
+
+
 class BulkMarkAttendanceSerializer(serializers.Serializer):
     employee_ids = serializers.ListField(
         child=serializers.UUIDField(),

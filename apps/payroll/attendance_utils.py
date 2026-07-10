@@ -191,6 +191,93 @@ def mark_attendance(employee, target_date, status, leave_type=None, notes='', ma
     return record, created
 
 
+def mark_leave_range(
+        employee, from_date, to_date,
+        leave_type, leave_note='',
+        include_weekends=False,
+        marked_by=None):
+    """
+    Mark leave for an employee across a date range.
+
+    Rules:
+      - Skips weekends (Sat + Sun) by default unless include_weekends=True
+      - Always skips active PublicHoliday dates
+      - Returns a summary dict of what was marked and skipped
+    """
+    from datetime import timedelta
+    from .models import AttendanceRecord, PublicHoliday, LeaveBalance
+
+    if from_date > to_date:
+        raise ValueError('from_date must be before or equal to to_date')
+
+    valid_leave_types = ('casual', 'sick', 'earned', 'unpaid', 'other')
+    if leave_type not in valid_leave_types:
+        raise ValueError(f'Invalid leave_type: {leave_type}')
+
+    # Fetch all public holiday dates in range once
+    holiday_map = {
+        h.date: h.name
+        for h in PublicHoliday.objects.filter(
+            date__gte=from_date, date__lte=to_date, is_active=True
+        )
+    }
+
+    marked_dates     = []
+    skipped_weekends = 0
+    skipped_holidays = []
+    current          = from_date
+
+    while current <= to_date:
+        is_weekend = current.weekday() >= 5  # Sat=5, Sun=6
+
+        if is_weekend and not include_weekends:
+            skipped_weekends += 1
+            current += timedelta(days=1)
+            continue
+
+        if current in holiday_map:
+            skipped_holidays.append({
+                'date': str(current),
+                'name': holiday_map[current],
+            })
+            current += timedelta(days=1)
+            continue
+
+        AttendanceRecord.objects.update_or_create(
+            employee=employee,
+            date=current,
+            defaults={
+                'status':     'leave',
+                'leave_type': leave_type,
+                'notes':      leave_note or '',
+                'marked_by':  marked_by,
+            },
+        )
+        marked_dates.append(str(current))
+        current += timedelta(days=1)
+
+    # Return leave balance for the from_date year if it exists
+    year = from_date.year
+    balance_qs = LeaveBalance.objects.filter(employee=employee, year=year).first()
+    leave_balance_after = None
+    if balance_qs:
+        leave_balance_after = {
+            'year':         year,
+            'casual_leave': float(balance_qs.casual_leave),
+            'sick_leave':   float(balance_qs.sick_leave),
+            'earned_leave': float(balance_qs.earned_leave),
+        }
+
+    return {
+        'marked_dates':      marked_dates,
+        'total_marked':      len(marked_dates),
+        'skipped_weekends':  skipped_weekends,
+        'skipped_holidays':  skipped_holidays,
+        'leave_type':        leave_type,
+        'leave_balance_after': leave_balance_after,
+    }
+
+
 def bulk_mark_attendance(employees_qs, target_date, status, notes='', marked_by=None):
     """Marks attendance for multiple employees on the same date."""
     results = {'marked': 0, 'errors': []}
