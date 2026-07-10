@@ -146,3 +146,38 @@ class PayrollMonthViewSet(viewsets.ModelViewSet):
         pm   = self.get_object()
         html = generate_salary_slip_html(pm)
         return HttpResponse(html, content_type='text/html')
+
+    @action(detail=True, methods=['post'], url_path='fill-from-attendance')
+    def fill_from_attendance(self, request, pk=None):
+        """Pro-rate gross/net salary based on attendance records for the payroll month."""
+        from decimal import Decimal
+        from .attendance_utils import auto_fill_payroll_from_attendance
+
+        pm = self.get_object()
+
+        if pm.status == 'paid':
+            return Response({'error': 'Cannot adjust a paid payroll record.'}, status=400)
+
+        attendance = auto_fill_payroll_from_attendance(pm.employee, pm.month, pm.year)
+        working_days = attendance['working_days']
+        paid_days    = Decimal(str(attendance['paid_days']))
+
+        if working_days == 0:
+            return Response({'error': 'No working days found for this month. Cannot compute attendance ratio.'}, status=400)
+
+        paid_ratio   = paid_days / Decimal(str(working_days))
+        original_gross = pm.gross_salary
+
+        adjusted_gross = (original_gross * paid_ratio).quantize(Decimal('0.01'))
+        adjusted_net   = max(adjusted_gross - pm.total_deductions, Decimal('0'))
+
+        pm.gross_salary = adjusted_gross
+        pm.net_salary   = adjusted_net
+        note_line = f'Attendance adjusted: {float(paid_days):.1f}/{working_days} days ({attendance["attendance_rate"]}%)'
+        pm.notes = (pm.notes + '\n' + note_line).strip()
+        pm.save()
+
+        return Response({
+            **PayrollMonthSerializer(pm).data,
+            'attendance': attendance,
+        })
