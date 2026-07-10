@@ -162,23 +162,21 @@ def calculate_daily_hours(partner, target_date):
     }
 
 
-def _classify_day(hours):
-    if hours >= 6:
-        return 'full_day'
-    if hours >= 1:
-        return 'half_day'
-    return 'absent'
-
-
 def get_monthly_ledger(partner, year, month):
     """
     Returns a full monthly duty ledger for a partner.
     All display values are pre-formatted in IST.
     """
-    from .models import DeliveryAssignment
+    from .models import DeliveryAssignment, DeliverySettings
 
     _, days_in_month = calendar.monthrange(year, month)
     today_ist        = timezone.now().astimezone(IST).date()
+
+    # Load configurable thresholds once — avoids N DB queries per day
+    duty_settings   = DeliverySettings.get()
+    full_day_hours  = float(duty_settings.full_day_hours)
+    half_day_hours  = float(duty_settings.half_day_hours)
+    count_half_days = duty_settings.count_half_days
 
     # Partner identity — gracefully degrade if no payroll profile
     partner_name = partner.user.full_name
@@ -209,18 +207,21 @@ def get_monthly_ledger(partner, year, month):
             continue
 
         daily       = calculate_daily_hours(partner, d)
-        day_status  = _classify_day(daily['total_hours'])
-        day_seconds = daily['total_hours'] * 3600
+        hours       = daily['total_hours']
+        day_seconds = hours * 3600
 
-        if day_status == 'full_day':
+        if hours >= full_day_hours:
+            day_status = 'full_day'
             full_days  += 1
-        elif day_status == 'half_day':
+        elif count_half_days and hours >= half_day_hours:
+            day_status = 'half_day'
             half_days  += 1
         else:
+            day_status   = 'absent'
             absent_days += 1
 
-        if daily['total_hours'] > 0:
-            days_worked    += 1
+        if day_status != 'absent':
+            days_worked          += 1
             total_seconds_worked += day_seconds
 
         # Orders on this IST calendar day
@@ -283,6 +284,11 @@ def get_monthly_ledger(partner, year, month):
         'total_failed':    total_failed,
         'days':            days_entries,
         'timezone':        'IST (UTC+5:30)',
+        'duty_thresholds': {
+            'full_day_hours':  full_day_hours,
+            'half_day_hours':  half_day_hours,
+            'count_half_days': count_half_days,
+        },
     }
 
 
