@@ -473,3 +473,93 @@ class TestMonthlyLedger(TestCase):
         self.assertFalse(s['ongoing'])
         self.assertIn('09:00', s['start_display'])
         self.assertIn('05:00', s['end_display'])
+
+
+# ─── duty hours settings ──────────────────────────────────────────────────────
+
+class TestDutyHoursSettings(TestCase):
+    """Test that day status respects DeliverySettings thresholds."""
+
+    def setUp(self):
+        from apps.delivery.models import DeliverySettings
+        self.partner  = _make_partner('settings1')
+        self.settings = DeliverySettings.get()
+        self.settings.full_day_hours  = 6.0
+        self.settings.half_day_hours  = 3.0
+        self.settings.count_half_days = True
+        self.settings.save()
+
+    def _session(self, day, start_h, end_h):
+        from apps.delivery.models import DutyLog
+        d   = date(2026, 7, day)
+        on  = make_ist(2026, 7, day, start_h, 0).astimezone(pytz.utc)
+        off = make_ist(2026, 7, day, end_h,   0).astimezone(pytz.utc)
+        DutyLog.objects.create(partner=self.partner, status='on_duty',  timestamp=on,  date=d)
+        DutyLog.objects.create(partner=self.partner, status='off_duty', timestamp=off, date=d)
+
+    def test_default_thresholds(self):
+        """8h→full, 4h→half, 1h→absent, 0h→absent with defaults (6h full / 3h half)."""
+        from apps.delivery.duty_utils import get_monthly_ledger
+
+        self._session(1, 9, 17)   # 8h → full_day
+        self._session(2, 9, 13)   # 4h → half_day
+        self._session(3, 9, 10)   # 1h → absent (< 3h threshold)
+        # day 4 no session → absent
+
+        result = get_monthly_ledger(self.partner, 2026, 7)
+        self.assertEqual(result['days'][0]['status'], 'full_day')
+        self.assertEqual(result['days'][1]['status'], 'half_day')
+        self.assertEqual(result['days'][2]['status'], 'absent')
+        self.assertEqual(result['days'][3]['status'], 'absent')
+
+    def test_custom_full_day_threshold(self):
+        """Admin raises full_day to 8h → 7h session becomes half_day."""
+        from apps.delivery.duty_utils import get_monthly_ledger
+
+        self.settings.full_day_hours = 8.0
+        self.settings.half_day_hours = 4.0
+        self.settings.save()
+
+        self._session(1, 9, 16)   # 7h < 8h → half_day now
+
+        result = get_monthly_ledger(self.partner, 2026, 7)
+        self.assertEqual(result['days'][0]['status'], 'half_day')
+
+    def test_count_half_days_off(self):
+        """count_half_days=False: a 4h session is absent, not half_day."""
+        from apps.delivery.duty_utils import get_monthly_ledger
+
+        self.settings.count_half_days = False
+        self.settings.save()
+
+        self._session(1, 9, 13)   # 4h, but half days disabled
+
+        result = get_monthly_ledger(self.partner, 2026, 7)
+        self.assertEqual(result['days'][0]['status'], 'absent')
+
+    def test_thresholds_in_response(self):
+        """get_monthly_ledger returns duty_thresholds so frontend can display them."""
+        from apps.delivery.duty_utils import get_monthly_ledger
+
+        self.settings.full_day_hours  = 7.0
+        self.settings.half_day_hours  = 3.5
+        self.settings.count_half_days = True
+        self.settings.save()
+
+        result = get_monthly_ledger(self.partner, 2026, 7)
+        t = result['duty_thresholds']
+        self.assertEqual(t['full_day_hours'],  7.0)
+        self.assertEqual(t['half_day_hours'],  3.5)
+        self.assertTrue(t['count_half_days'])
+
+    def test_validation_half_gte_full_rejected(self):
+        """half_day_hours >= full_day_hours must be rejected by the serializer."""
+        from apps.delivery.serializers import DeliverySettingsSerializer
+
+        ser = DeliverySettingsSerializer(
+            self.settings,
+            data={'full_day_hours': 5.0, 'half_day_hours': 5.0, 'count_half_days': True},
+            partial=True,
+        )
+        self.assertFalse(ser.is_valid())
+        self.assertIn('half_day_hours', ser.errors)

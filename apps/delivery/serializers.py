@@ -51,8 +51,31 @@ class DeliveryPartnerSerializer(serializers.ModelSerializer):
 class DeliverySettingsSerializer(serializers.ModelSerializer):
     class Meta:
         model  = DeliverySettings
-        fields = ['auto_assign', 'assignment_mode', 'default_proof_type', 'max_orders_per_partner', 'updated_at']
+        fields = [
+            'auto_assign', 'assignment_mode', 'default_proof_type',
+            'max_orders_per_partner',
+            'full_day_hours', 'half_day_hours', 'count_half_days',
+            'updated_at',
+        ]
         read_only_fields = ['updated_at']
+
+    def validate(self, data):
+        full = float(data.get('full_day_hours', getattr(self.instance, 'full_day_hours', 6.0)))
+        half = float(data.get('half_day_hours', getattr(self.instance, 'half_day_hours', 3.0)))
+
+        if half >= full:
+            raise serializers.ValidationError({
+                'half_day_hours': f'Half day hours ({half}h) must be less than full day hours ({full}h)',
+            })
+        if full > 24:
+            raise serializers.ValidationError({
+                'full_day_hours': 'Full day hours cannot exceed 24',
+            })
+        if half < 0.5:
+            raise serializers.ValidationError({
+                'half_day_hours': 'Half day hours must be at least 0.5',
+            })
+        return data
 
 
 class DeliveryStatusLogSerializer(serializers.ModelSerializer):

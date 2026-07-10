@@ -109,6 +109,18 @@ class DeliverySettings(models.Model):
     assignment_mode          = models.CharField(max_length=20, choices=ASSIGNMENT_MODE_CHOICES, default='manual')
     default_proof_type       = models.CharField(max_length=10, choices=PROOF_TYPE_CHOICES, default='either')
     max_orders_per_partner   = models.PositiveIntegerField(default=8)
+    full_day_hours           = models.DecimalField(
+        max_digits=4, decimal_places=1, default=6.0,
+        help_text='Minimum hours to count as a full day. Default: 6.0 hours',
+    )
+    half_day_hours           = models.DecimalField(
+        max_digits=4, decimal_places=1, default=3.0,
+        help_text='Minimum hours to count as a half day. Default: 3.0 hours',
+    )
+    count_half_days          = models.BooleanField(
+        default=True,
+        help_text='If OFF, only Full Day or Absent — no half day status',
+    )
     updated_by               = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
@@ -123,7 +135,17 @@ class DeliverySettings(models.Model):
 
     @classmethod
     def get(cls):
-        obj, _ = cls.objects.get_or_create(pk=1)
+        obj, _ = cls.objects.get_or_create(
+            pk=1,
+            defaults={
+                'assignment_mode':        'manual',
+                'default_proof_type':     'either',
+                'max_orders_per_partner': 8,
+                'full_day_hours':         6.0,
+                'half_day_hours':         3.0,
+                'count_half_days':        True,
+            },
+        )
         return obj
 
     class Meta:
