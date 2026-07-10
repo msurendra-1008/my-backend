@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import Department, EmployeeProfile, SalaryStructure, PayrollMonth
+from .models import Department, EmployeeProfile, SalaryStructure, PayrollMonth, PublicHoliday, LeaveBalance, AttendanceRecord
 
 
 @admin.register(Department)
@@ -51,3 +51,28 @@ class PayrollMonthAdmin(admin.ModelAdmin):
     list_filter   = ('status', 'year', 'month')
     search_fields = ('employee__employee_code', 'employee__user__first_name', 'employee__user__last_name')
     readonly_fields = ('paid_at', 'paid_by', 'created_at', 'updated_at')
+
+
+@admin.register(PublicHoliday)
+class PublicHolidayAdmin(admin.ModelAdmin):
+    list_display  = ('date', 'name', 'is_active')
+    list_filter   = ('is_active',)
+    search_fields = ('name',)
+    ordering      = ('date',)
+
+
+@admin.register(LeaveBalance)
+class LeaveBalanceAdmin(admin.ModelAdmin):
+    list_display  = ('employee', 'year', 'casual_leave', 'sick_leave', 'earned_leave')
+    list_filter   = ('year',)
+    search_fields = ('employee__employee_code', 'employee__user__first_name', 'employee__user__last_name')
+    raw_id_fields = ('employee',)
+
+
+@admin.register(AttendanceRecord)
+class AttendanceRecordAdmin(admin.ModelAdmin):
+    list_display  = ('employee', 'date', 'status', 'leave_type', 'marked_by')
+    list_filter   = ('status', 'leave_type')
+    search_fields = ('employee__employee_code', 'employee__user__first_name', 'employee__user__last_name')
+    date_hierarchy = 'date'
+    raw_id_fields  = ('employee', 'marked_by')

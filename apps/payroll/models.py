@@ -3,6 +3,7 @@ from django.conf import settings
 from django.db import models
 
 
+
 class Department(models.Model):
     id   = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     name = models.CharField(max_length=100, unique=True)
@@ -136,3 +137,74 @@ class PayrollMonth(models.Model):
 
     def __str__(self):
         return f'{self.employee} — {self.month}/{self.year}'
+
+
+class PublicHoliday(models.Model):
+    id         = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    date       = models.DateField(unique=True)
+    name       = models.CharField(max_length=100)
+    is_active  = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['date']
+
+    def __str__(self):
+        return f'{self.name} ({self.date})'
+
+
+class LeaveBalance(models.Model):
+    id           = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    employee     = models.ForeignKey(EmployeeProfile, on_delete=models.CASCADE, related_name='leave_balances')
+    year         = models.PositiveSmallIntegerField()
+    casual_leave = models.DecimalField(max_digits=5, decimal_places=1, default=0)
+    sick_leave   = models.DecimalField(max_digits=5, decimal_places=1, default=0)
+    earned_leave = models.DecimalField(max_digits=5, decimal_places=1, default=0)
+    updated_at   = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ('employee', 'year')
+        ordering        = ['-year']
+
+    def __str__(self):
+        return f'{self.employee} — Leave Balance {self.year}'
+
+
+class AttendanceRecord(models.Model):
+    STATUS_CHOICES = [
+        ('present',  'Present'),
+        ('absent',   'Absent'),
+        ('half_day', 'Half Day'),
+        ('leave',    'Leave'),
+        ('holiday',  'Holiday'),
+        ('week_off', 'Week Off'),
+    ]
+    LEAVE_TYPE_CHOICES = [
+        ('casual', 'Casual'),
+        ('sick',   'Sick'),
+        ('earned', 'Earned'),
+        ('unpaid', 'Unpaid'),
+        ('other',  'Other'),
+    ]
+
+    id         = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    employee   = models.ForeignKey(EmployeeProfile, on_delete=models.CASCADE, related_name='attendance_records')
+    date       = models.DateField()
+    status     = models.CharField(max_length=10, choices=STATUS_CHOICES)
+    leave_type = models.CharField(max_length=10, choices=LEAVE_TYPE_CHOICES, blank=True, null=True)
+    notes      = models.TextField(blank=True)
+    marked_by  = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='attendance_marks',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ('employee', 'date')
+        ordering        = ['-date']
+
+    def __str__(self):
+        return f'{self.employee} — {self.date} — {self.status}'
