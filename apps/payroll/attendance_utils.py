@@ -1,10 +1,68 @@
 import calendar
+import logging
 from datetime import date
 from decimal import Decimal
 
+logger = logging.getLogger(__name__)
+
+
+# ── Delivery partner helpers ──────────────────────────────────────────────────
+
+def _find_delivery_partner(employee):
+    """
+    Return the DeliveryPartner whose user matches this EmployeeProfile's user,
+    or None. Uses the shared auth user as the bridge — there is no direct FK
+    from DeliveryPartner to EmployeeProfile.
+    """
+    try:
+        from apps.delivery.models import DeliveryPartner
+        return DeliveryPartner.objects.get(user=employee.user)
+    except Exception:
+        return None
+
+
+def _duty_hours_to_status(hours, duty_settings):
+    """Convert duty hours float to an attendance status string."""
+    full_h     = float(duty_settings.full_day_hours)
+    half_h     = float(duty_settings.half_day_hours)
+    count_half = duty_settings.count_half_days
+
+    if hours >= full_h:
+        return 'present'
+    elif count_half and hours >= half_h:
+        return 'half_day'
+    else:
+        return 'absent'
+
+
+def _duty_cell(hours, duty_settings):
+    """Build a cell-status dict for a delivery-partner day sourced from duty logs."""
+    status = _duty_hours_to_status(hours, duty_settings)
+    notes  = f'{hours}h on duty' if hours > 0 else ''
+    return {
+        'status':      status,
+        'leave_type':  None,
+        'notes':       notes,
+        'is_holiday':  False,
+        'record_id':   None,
+        'duty_hours':  hours,
+    }
+
+
+# ── Core status functions ─────────────────────────────────────────────────────
 
 def get_cell_status(employee, target_date):
-    """Returns a status dict for a single date (no DB writes)."""
+    """
+    Returns a status dict for a single date (no DB writes).
+
+    Priority:
+      1. Sunday          → week_off (always)
+      2. Public holiday  → holiday  (always)
+      3. Manual AttendanceRecord → use that (manual always wins)
+      4. Delivery partner → derive status from duty hours
+      5. Future          → future
+      6. Default         → absent
+    """
     from django.utils import timezone
     from .models import AttendanceRecord, PublicHoliday
 
@@ -17,6 +75,7 @@ def get_cell_status(employee, target_date):
     except PublicHoliday.DoesNotExist:
         pass
 
+    # Manual override always wins over duty-derived status
     try:
         rec = AttendanceRecord.objects.get(employee=employee, date=target_date)
         return {
@@ -32,6 +91,18 @@ def get_cell_status(employee, target_date):
     today = timezone.localdate()
     if target_date > today:
         return {'status': 'future', 'leave_type': None, 'notes': '', 'is_holiday': False, 'record_id': None}
+
+    # Delivery partner: derive attendance from duty hours
+    partner = _find_delivery_partner(employee)
+    if partner is not None:
+        try:
+            from apps.delivery.duty_utils import calculate_daily_hours
+            from apps.delivery.models import DeliverySettings
+            daily         = calculate_daily_hours(partner, target_date)
+            duty_settings = DeliverySettings.get()
+            return _duty_cell(daily['total_hours'], duty_settings)
+        except Exception as exc:
+            logger.error('Duty hours lookup failed for %s on %s: %s', employee, target_date, exc)
 
     return {'status': 'absent', 'leave_type': None, 'notes': '', 'is_holiday': False, 'record_id': None}
 
@@ -53,6 +124,16 @@ def get_monthly_summary(employee, year, month):
     )}
 
     today = timezone.localdate()
+
+    # Delivery partner setup — fetch once outside the loop
+    partner       = _find_delivery_partner(employee)
+    duty_settings = None
+    if partner is not None:
+        try:
+            from apps.delivery.models import DeliverySettings
+            duty_settings = DeliverySettings.get()
+        except Exception:
+            partner = None
 
     summary = {
         'present': 0, 'absent': 0, 'half_day': 0,
@@ -84,6 +165,19 @@ def get_monthly_summary(employee, year, month):
                 summary['paid_days'] += 0.5
             elif st == 'leave':
                 summary['paid_days'] += 1
+        elif partner is not None and duty_settings is not None:
+            try:
+                from apps.delivery.duty_utils import calculate_daily_hours
+                daily = calculate_daily_hours(partner, d)
+                st    = _duty_hours_to_status(daily['total_hours'], duty_settings)
+                summary[st] = summary.get(st, 0) + 1
+                if st == 'present':
+                    summary['paid_days'] += 1
+                elif st == 'half_day':
+                    summary['paid_days'] += 0.5
+            except Exception as exc:
+                logger.error('Duty hours lookup failed for %s on %s: %s', employee, d, exc)
+                summary['absent'] += 1
         else:
             summary['absent'] += 1
 
@@ -114,12 +208,24 @@ def get_employee_calendar(employee, year, month):
     )}
 
     today = timezone.localdate()
+
+    # Delivery partner setup — fetch once outside the loop
+    partner       = _find_delivery_partner(employee)
+    duty_settings = None
+    if partner is not None:
+        try:
+            from apps.delivery.models import DeliverySettings
+            duty_settings = DeliverySettings.get()
+        except Exception:
+            partner = None
+
     days_list = []
 
     for day_num in range(1, days_in_month + 1):
         d         = date(year, month, day_num)
         is_future = d > today
         is_sunday = d.weekday() == 6
+        duty_hours = None
 
         if is_sunday:
             status     = 'week_off'
@@ -142,13 +248,29 @@ def get_employee_calendar(employee, year, month):
             leave_type = None
             notes      = ''
             record_id  = None
+        elif partner is not None and duty_settings is not None:
+            try:
+                from apps.delivery.duty_utils import calculate_daily_hours
+                daily      = calculate_daily_hours(partner, d)
+                duty_hours = daily['total_hours']
+                cell       = _duty_cell(duty_hours, duty_settings)
+                status     = cell['status']
+                leave_type = None
+                notes      = cell['notes']
+                record_id  = None
+            except Exception as exc:
+                logger.error('Duty hours lookup failed for %s on %s: %s', employee, d, exc)
+                status     = 'absent'
+                leave_type = None
+                notes      = ''
+                record_id  = None
         else:
             status     = 'absent'
             leave_type = None
             notes      = ''
             record_id  = None
 
-        days_list.append({
+        entry = {
             'date':       d.isoformat(),
             'day_num':    day_num,
             'day_name':   DAYS_SHORT[d.weekday()],
@@ -159,7 +281,10 @@ def get_employee_calendar(employee, year, month):
             'is_future':  is_future,
             'is_sunday':  is_sunday,
             'record_id':  record_id,
-        })
+        }
+        if duty_hours is not None:
+            entry['duty_hours'] = duty_hours
+        days_list.append(entry)
 
     return {
         'employee_id':   str(employee.id),
