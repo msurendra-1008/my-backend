@@ -640,36 +640,71 @@ class UserOrderViewSet(LoginRequiredMixin, viewsets.ReadOnlyModelViewSet):
         hours_since  = (timezone.now() - order.created_at).total_seconds() / 3600
         price_locked = hours_since <= PRICE_LOCK_HOURS
 
-        items_out = []
-        for item in order.items.select_related("variant__product").all():
-            stock         = item.variant.stock_quantity
-            stock_ok      = stock >= item.quantity
-            stock_shortfall = max(0, item.quantity - stock)
+        order_items = list(order.items.select_related("variant__product").all())
 
-            if not price_locked:
-                pdata        = get_upa_price(item.variant)
-                current_upa  = Decimal(pdata["upa_price"])
-                price_changed = current_upa != item.upa_price
-            else:
-                current_upa   = item.upa_price
-                price_changed = False
+        # Legacy orders (created before item-snapshotting) have no OrderItems.
+        # Fall back to the current cart so the user can still see what they're paying for.
+        if not order_items:
+            try:
+                cart = Cart.objects.get(user=request.user)
+                _, _, _, cart_items_data = _compute_cart_totals(cart)
+            except Cart.DoesNotExist:
+                cart_items_data = []
 
-            items_out.append({
-                "id":               str(item.id),
-                "product_name":     item.product_name,
-                "variant_name":     item.variant_name,
-                "variant_id":       str(item.variant_id) if item.variant_id else None,
-                "sku":              item.sku,
-                "quantity":         item.quantity,
-                "mrp":              str(item.mrp),
-                "upa_price":        str(current_upa),
-                "upa_price_locked": str(item.upa_price),
-                "line_total":       str(item.line_total),
-                "price_changed":    price_changed,
-                "stock_quantity":   stock,
-                "stock_ok":         stock_ok,
-                "stock_shortfall":  stock_shortfall,
-            })
+            items_out = []
+            for idata in cart_items_data:
+                variant = idata["variant"]
+                qty     = idata["quantity"]
+                stock   = variant.stock_quantity
+                items_out.append({
+                    "id":               None,
+                    "product_name":     idata["product_name"],
+                    "variant_name":     idata["variant_name"],
+                    "variant_id":       str(variant.id),
+                    "sku":              idata["sku"],
+                    "quantity":         qty,
+                    "mrp":              str(idata["mrp"]),
+                    "upa_price":        str(idata["upa_price"]),
+                    "upa_price_locked": str(idata["upa_price"]),
+                    "line_total":       str(idata["line_total"]),
+                    "price_changed":    False,
+                    "stock_quantity":   stock,
+                    "stock_ok":         stock >= qty,
+                    "stock_shortfall":  max(0, qty - stock),
+                    "legacy":           True,
+                })
+        else:
+            items_out = []
+            for item in order_items:
+                stock           = item.variant.stock_quantity
+                stock_ok        = stock >= item.quantity
+                stock_shortfall = max(0, item.quantity - stock)
+
+                if not price_locked:
+                    pdata         = get_upa_price(item.variant)
+                    current_upa   = Decimal(pdata["upa_price"])
+                    price_changed = current_upa != item.upa_price
+                else:
+                    current_upa   = item.upa_price
+                    price_changed = False
+
+                items_out.append({
+                    "id":               str(item.id),
+                    "product_name":     item.product_name,
+                    "variant_name":     item.variant_name,
+                    "variant_id":       str(item.variant_id) if item.variant_id else None,
+                    "sku":              item.sku,
+                    "quantity":         item.quantity,
+                    "mrp":              str(item.mrp),
+                    "upa_price":        str(current_upa),
+                    "upa_price_locked": str(item.upa_price),
+                    "line_total":       str(item.line_total),
+                    "price_changed":    price_changed,
+                    "stock_quantity":   stock,
+                    "stock_ok":         stock_ok,
+                    "stock_shortfall":  stock_shortfall,
+                    "legacy":           False,
+                })
 
         try:
             wallet_balance = str(Wallet.objects.get(user=request.user).balance)
