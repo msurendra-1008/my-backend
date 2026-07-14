@@ -210,7 +210,7 @@ class CheckoutInitiateView(LoginRequiredMixin, APIView):
                     status=400,
                 )
 
-        subtotal, upa_discount, amount_payable, _ = _compute_cart_totals(cart)
+        subtotal, upa_discount, amount_payable, items_data = _compute_cart_totals(cart)
 
         # Wallet cap
         wallet_amount = min(data["wallet_amount"], amount_payable)
@@ -240,6 +240,23 @@ class CheckoutInitiateView(LoginRequiredMixin, APIView):
             payment_status="pending",
             order_status="pending",
         )
+
+        # Snapshot OrderItems at initiate time (price-locked)
+        for idata in items_data:
+            OrderItem.objects.create(
+                order=draft_order,
+                variant=idata["variant"],
+                product_name=idata["product_name"],
+                variant_name=idata["variant_name"],
+                sku=idata["sku"],
+                mrp=idata["mrp"],
+                upa_price=idata["upa_price"],
+                quantity=idata["quantity"],
+                line_total=idata["line_total"],
+                other_charges=idata["other_charges"],
+                gst_amount=idata["gst_amount"],
+                status="pending",
+            )
 
         result = {
             "internal_order_id": str(draft_order.id),
@@ -275,7 +292,6 @@ class CheckoutConfirmView(LoginRequiredMixin, APIView):
         ser.is_valid(raise_exception=True)
         data = ser.validated_data
 
-        # Fetch the draft order created by initiate — owned by this user
         order = get_object_or_404(
             Order,
             pk=data["internal_order_id"],
@@ -283,8 +299,137 @@ class CheckoutConfirmView(LoginRequiredMixin, APIView):
             payment_status="pending",
         )
 
-        print(f"[checkout_confirm] BEFORE update — order.id={order.id}  order.order_status={order.order_status!r}  order.payment_status={order.payment_status!r}")
+        existing_items = list(order.items.select_related("variant__product").all())
 
+        if existing_items:
+            return self._confirm_with_items(request, order, existing_items, data)
+        return self._confirm_from_cart(request, order, data)
+
+    def _confirm_with_items(self, request, order, existing_items, data):
+        """Confirm path for orders that have pre-snapshotted OrderItems (new flow)."""
+        PRICE_LOCK_HOURS = 24
+        hours_since = (timezone.now() - order.created_at).total_seconds() / 3600
+        price_locked = hours_since <= PRICE_LOCK_HOURS
+
+        q = lambda d: d.quantize(Decimal("0.01"), ROUND_HALF_UP)
+
+        if not price_locked:
+            for item in existing_items:
+                pdata   = get_upa_price(item.variant)
+                product = item.variant.product
+                qty     = item.quantity
+                mrp     = Decimal(pdata["mrp"])
+                upa     = Decimal(pdata["upa_price"])
+                if product.other_charges_type == "flat":
+                    other = Decimal(str(product.other_charges or 0)) * qty
+                else:
+                    other = upa * Decimal(str(product.other_charges or 0)) / 100 * qty
+                other = q(other)
+                gst   = q(upa * Decimal(str(product.gst_percentage or 0)) / 100 * qty)
+                lt    = q(upa * qty + other + gst)
+                item.mrp          = mrp
+                item.upa_price    = upa
+                item.other_charges = other
+                item.gst_amount   = gst
+                item.line_total   = lt
+                item.save(update_fields=["mrp", "upa_price", "other_charges", "gst_amount", "line_total"])
+
+        items_data = [
+            {
+                "variant":      i.variant,
+                "product_name": i.product_name,
+                "variant_name": i.variant_name,
+                "sku":          i.sku,
+                "mrp":          i.mrp,
+                "upa_price":    i.upa_price,
+                "quantity":     i.quantity,
+                "line_total":   i.line_total,
+                "other_charges": i.other_charges or Decimal("0"),
+                "gst_amount":   i.gst_amount   or Decimal("0"),
+            }
+            for i in existing_items
+        ]
+
+        subtotal       = q(sum(d["mrp"] * d["quantity"]                      for d in items_data))
+        upa_discount   = q(sum((d["mrp"] - d["upa_price"]) * d["quantity"]   for d in items_data))
+        amount_payable = q(sum(d["line_total"]                                for d in items_data))
+
+        wallet_amount   = order.wallet_used
+        razorpay_amount = order.razorpay_amount
+
+        try:
+            wallet = Wallet.objects.get(user=request.user)
+        except Wallet.DoesNotExist:
+            wallet = None
+
+        if razorpay_amount > Decimal("0"):
+            if not verify_razorpay_signature(
+                data["razorpay_order_id"],
+                data["razorpay_payment_id"],
+                data["razorpay_signature"],
+            ):
+                return Response({"detail": "Payment verification failed."}, status=400)
+
+        with transaction.atomic():
+            for idata in items_data:
+                variant = ProductVariant.objects.select_for_update().get(pk=idata["variant"].pk)
+                if variant.stock_quantity < idata["quantity"]:
+                    return Response(
+                        {"detail": f"'{variant.name}' went out of stock."},
+                        status=400,
+                    )
+
+            order.payment_status      = "paid"
+            order.order_status        = "confirmed"
+            order.razorpay_payment_id = data["razorpay_payment_id"]
+            order.razorpay_order_id   = data["razorpay_order_id"]
+            order.razorpay_signature  = data["razorpay_signature"]
+            order.subtotal            = subtotal
+            order.upa_discount        = upa_discount
+            order.amount_payable      = amount_payable
+            order.save(update_fields=[
+                "payment_status", "order_status",
+                "razorpay_payment_id", "razorpay_order_id", "razorpay_signature",
+                "subtotal", "upa_discount", "amount_payable",
+            ])
+
+            from apps.warehouse.utils import deduct_stock as fifo_deduct
+            order_ref = str(order.id)[:20]
+            for idata in items_data:
+                variant = idata["variant"]
+                qty     = idata["quantity"]
+                try:
+                    fifo_deduct(variant, qty, performed_by=request.user, reference=order_ref)
+                except ValueError:
+                    ProductVariant.objects.filter(pk=variant.pk).update(
+                        stock_quantity=variant.stock_quantity - qty
+                    )
+
+            if wallet and wallet_amount > Decimal("0"):
+                wallet.balance -= wallet_amount
+                wallet.save(update_fields=["balance"])
+                WalletTransaction.objects.create(
+                    wallet=wallet,
+                    type="debit",
+                    amount=wallet_amount,
+                    reason="Payment for order",
+                    reference=data["razorpay_order_id"] or "wallet-only",
+                )
+
+            order.items.all().update(status="confirmed")
+
+            try:
+                cart = Cart.objects.get(user=request.user)
+                variant_ids = [d["variant"].pk for d in items_data]
+                cart.items.filter(variant_id__in=variant_ids).delete()
+            except Cart.DoesNotExist:
+                pass
+
+        self._post_confirm_hooks(order)
+        return Response(OrderDetailSerializer(order).data, status=status.HTTP_201_CREATED)
+
+    def _confirm_from_cart(self, request, order, data):
+        """Legacy confirm path: compute items from the current cart."""
         try:
             cart = Cart.objects.get(user=request.user)
         except Cart.DoesNotExist:
@@ -293,10 +438,8 @@ class CheckoutConfirmView(LoginRequiredMixin, APIView):
         if not cart.items.exists():
             return Response({"detail": "Cart is empty."}, status=400)
 
-        # Re-compute totals from the current cart
         subtotal, upa_discount, amount_payable, items_data = _compute_cart_totals(cart)
 
-        # Wallet cap
         wallet_amount = data["wallet_amount"]
         try:
             wallet = Wallet.objects.get(user=request.user)
@@ -312,7 +455,6 @@ class CheckoutConfirmView(LoginRequiredMixin, APIView):
         wallet_amount   = wallet_amount.quantize(Decimal("0.01"), ROUND_HALF_UP)
         razorpay_amount = (amount_payable - wallet_amount).quantize(Decimal("0.01"), ROUND_HALF_UP)
 
-        # Signature verification (skipped in mock mode or wallet-only payments)
         if razorpay_amount > Decimal("0"):
             if not verify_razorpay_signature(
                 data["razorpay_order_id"],
@@ -322,7 +464,6 @@ class CheckoutConfirmView(LoginRequiredMixin, APIView):
                 return Response({"detail": "Payment verification failed."}, status=400)
 
         with transaction.atomic():
-            # Re-lock variants for stock check
             for idata in items_data:
                 variant = ProductVariant.objects.select_for_update().get(pk=idata["variant"].pk)
                 if variant.stock_quantity < idata["quantity"]:
@@ -331,18 +472,16 @@ class CheckoutConfirmView(LoginRequiredMixin, APIView):
                         status=400,
                     )
 
-            # ── Update the existing draft order (payment confirmed) ──────────
-            order.payment_status        = "paid"
-            order.order_status          = "confirmed"
-            order.razorpay_payment_id   = data["razorpay_payment_id"]
-            order.razorpay_order_id     = data["razorpay_order_id"]
-            order.razorpay_signature    = data["razorpay_signature"]
-            # Refresh financials from current cart (prices may have shifted)
-            order.subtotal              = subtotal
-            order.upa_discount          = upa_discount
-            order.amount_payable        = amount_payable
-            order.wallet_used           = wallet_amount
-            order.razorpay_amount       = razorpay_amount
+            order.payment_status      = "paid"
+            order.order_status        = "confirmed"
+            order.razorpay_payment_id = data["razorpay_payment_id"]
+            order.razorpay_order_id   = data["razorpay_order_id"]
+            order.razorpay_signature  = data["razorpay_signature"]
+            order.subtotal            = subtotal
+            order.upa_discount        = upa_discount
+            order.amount_payable      = amount_payable
+            order.wallet_used         = wallet_amount
+            order.razorpay_amount     = razorpay_amount
             order.save(update_fields=[
                 "payment_status", "order_status",
                 "razorpay_payment_id", "razorpay_order_id", "razorpay_signature",
@@ -350,23 +489,18 @@ class CheckoutConfirmView(LoginRequiredMixin, APIView):
                 "wallet_used", "razorpay_amount",
             ])
 
-            print(f"[checkout_confirm] AFTER  update — order.id={order.id}  order.order_status={order.order_status!r}  order.payment_status={order.payment_status!r}")
-
-            # Deduct stock (FIFO from rack stocks, falls back to direct deduction if no racks)
             from apps.warehouse.utils import deduct_stock as fifo_deduct
             order_ref = str(order.id)[:20]
             for idata in items_data:
                 variant = idata["variant"]
-                qty = idata["quantity"]
+                qty     = idata["quantity"]
                 try:
                     fifo_deduct(variant, qty, performed_by=request.user, reference=order_ref)
                 except ValueError:
-                    # No rack stock entries — fall back to direct stock deduction
                     ProductVariant.objects.filter(pk=variant.pk).update(
                         stock_quantity=variant.stock_quantity - qty
                     )
 
-            # Debit wallet
             if wallet and wallet_amount > Decimal("0"):
                 wallet.balance -= wallet_amount
                 wallet.save(update_fields=["balance"])
@@ -378,7 +512,6 @@ class CheckoutConfirmView(LoginRequiredMixin, APIView):
                     reference=data["razorpay_order_id"] or "wallet-only",
                 )
 
-            # Create OrderItems
             for idata in items_data:
                 OrderItem.objects.create(
                     order=order,
@@ -394,32 +527,28 @@ class CheckoutConfirmView(LoginRequiredMixin, APIView):
                     gst_amount=idata["gst_amount"],
                 )
 
-            # Set all order items to 'confirmed'
             order.items.all().update(status="confirmed")
-
-            # Clear cart
             cart.items.all().delete()
 
-        # Commission breakups (outside atomic block — failure must never roll back the order)
+        self._post_confirm_hooks(order)
+        return Response(OrderDetailSerializer(order).data, status=status.HTTP_201_CREATED)
+
+    @staticmethod
+    def _post_confirm_hooks(order):
+        import logging
+        from apps.commissions.utils import create_commission_breakup
+        _logger = logging.getLogger(__name__)
         if order.user:
-            import logging
-            from apps.commissions.utils import create_commission_breakup
-            _logger = logging.getLogger(__name__)
-            for item in order.items.select_related('variant__product').all():
+            for item in order.items.select_related("variant__product").all():
                 try:
                     create_commission_breakup(item)
                 except Exception as e:
-                    _logger.error('Commission breakup failed for item %s: %s', item.id, e)
-
-        # Company wallet — record order received
+                    _logger.error("Commission breakup failed for item %s: %s", item.id, e)
         try:
             from apps.company_wallet.utils import record_order_received
             record_order_received(order)
         except Exception as e:
-            import logging
-            logging.getLogger(__name__).error('CompanyWallet record_order_received failed: %s', e)
-
-        return Response(OrderDetailSerializer(order).data, status=status.HTTP_201_CREATED)
+            _logger.error("CompanyWallet record_order_received failed: %s", e)
 
 
 # ── User Orders ───────────────────────────────────────────────────────────────
@@ -499,6 +628,197 @@ class UserOrderViewSet(LoginRequiredMixin, viewsets.ReadOnlyModelViewSet):
             "message": "Order marked as satisfied. Commissions credited to upline wallets.",
             "satisfied_at": order.satisfied_at,
         })
+
+    @action(detail=True, methods=["get"], url_path="payment-info")
+    def payment_info(self, request, pk=None):
+        """Return items with stock/price status, addresses, and wallet balance for the pay sheet."""
+        order = self.get_object()
+        if order.payment_status != "pending" or order.order_status != "pending":
+            return Response({"error": "Order is not pending."}, status=400)
+
+        PRICE_LOCK_HOURS = 24
+        hours_since  = (timezone.now() - order.created_at).total_seconds() / 3600
+        price_locked = hours_since <= PRICE_LOCK_HOURS
+
+        order_items = list(order.items.select_related("variant__product").all())
+
+        # Legacy orders (created before item-snapshotting) have no OrderItems.
+        # Fall back to the current cart so the user can still see what they're paying for.
+        if not order_items:
+            try:
+                cart = Cart.objects.get(user=request.user)
+                _, _, _, cart_items_data = _compute_cart_totals(cart)
+            except Cart.DoesNotExist:
+                cart_items_data = []
+
+            items_out = []
+            for idata in cart_items_data:
+                variant = idata["variant"]
+                qty     = idata["quantity"]
+                stock   = variant.stock_quantity
+                items_out.append({
+                    "id":               None,
+                    "product_name":     idata["product_name"],
+                    "variant_name":     idata["variant_name"],
+                    "variant_id":       str(variant.id),
+                    "sku":              idata["sku"],
+                    "quantity":         qty,
+                    "mrp":              str(idata["mrp"]),
+                    "upa_price":        str(idata["upa_price"]),
+                    "upa_price_locked": str(idata["upa_price"]),
+                    "line_total":       str(idata["line_total"]),
+                    "price_changed":    False,
+                    "stock_quantity":   stock,
+                    "stock_ok":         stock >= qty,
+                    "stock_shortfall":  max(0, qty - stock),
+                    "legacy":           True,
+                })
+        else:
+            items_out = []
+            for item in order_items:
+                stock           = item.variant.stock_quantity
+                stock_ok        = stock >= item.quantity
+                stock_shortfall = max(0, item.quantity - stock)
+
+                if not price_locked:
+                    pdata         = get_upa_price(item.variant)
+                    current_upa   = Decimal(pdata["upa_price"])
+                    price_changed = current_upa != item.upa_price
+                else:
+                    current_upa   = item.upa_price
+                    price_changed = False
+
+                items_out.append({
+                    "id":               str(item.id),
+                    "product_name":     item.product_name,
+                    "variant_name":     item.variant_name,
+                    "variant_id":       str(item.variant_id) if item.variant_id else None,
+                    "sku":              item.sku,
+                    "quantity":         item.quantity,
+                    "mrp":              str(item.mrp),
+                    "upa_price":        str(current_upa),
+                    "upa_price_locked": str(item.upa_price),
+                    "line_total":       str(item.line_total),
+                    "price_changed":    price_changed,
+                    "stock_quantity":   stock,
+                    "stock_ok":         stock_ok,
+                    "stock_shortfall":  stock_shortfall,
+                    "legacy":           False,
+                })
+
+        try:
+            wallet_balance = str(Wallet.objects.get(user=request.user).balance)
+        except Wallet.DoesNotExist:
+            wallet_balance = "0.00"
+
+        addresses   = Address.objects.filter(user=request.user)
+        default_addr = addresses.filter(is_default=True).first() or addresses.first()
+
+        return Response({
+            "order_id":            str(order.id),
+            "order_number":        order.order_number,
+            "price_locked":        price_locked,
+            "hours_since_created": round(hours_since, 1),
+            "amount_payable":      str(order.amount_payable),
+            "wallet_used":         str(order.wallet_used),
+            "razorpay_amount":     str(order.razorpay_amount),
+            "items":               items_out,
+            "wallet_balance":      wallet_balance,
+            "addresses":           AddressSerializer(addresses, many=True).data,
+            "default_address_id":  str(default_addr.id) if default_addr else None,
+        })
+
+    @action(detail=True, methods=["post"], url_path="remove-item")
+    def remove_item(self, request, pk=None):
+        """Remove one item from a pending order and sync it out of the cart."""
+        order = self.get_object()
+        if order.payment_status != "pending":
+            return Response({"error": "Can only modify pending orders."}, status=400)
+
+        item_id = request.data.get("item_id")
+        if not item_id:
+            return Response({"error": "item_id required."}, status=400)
+
+        try:
+            item = order.items.get(id=item_id)
+        except OrderItem.DoesNotExist:
+            return Response({"error": "Item not found."}, status=404)
+
+        variant = item.variant
+        item.delete()
+
+        try:
+            Cart.objects.get(user=request.user).items.filter(variant=variant).delete()
+        except Cart.DoesNotExist:
+            pass
+
+        if not order.items.exists():
+            order.delete()
+            return Response({"order_cancelled": True})
+
+        q = lambda d: d.quantize(Decimal("0.01"), ROUND_HALF_UP)
+        remaining = list(order.items.all())
+        order.subtotal       = q(sum(i.mrp * i.quantity       for i in remaining))
+        order.upa_discount   = q(sum((i.mrp - i.upa_price) * i.quantity for i in remaining))
+        order.amount_payable = q(sum(i.line_total             for i in remaining))
+        order.wallet_used    = min(order.wallet_used, order.amount_payable)
+        order.razorpay_amount = q(order.amount_payable - order.wallet_used)
+        order.save(update_fields=["subtotal", "upa_discount", "amount_payable", "wallet_used", "razorpay_amount"])
+
+        return Response({"order_cancelled": False, "amount_payable": str(order.amount_payable)})
+
+    @action(detail=True, methods=["post"], url_path="cancel")
+    def cancel_pending(self, request, pk=None):
+        """Cancel a pending order (deletes it entirely)."""
+        order = self.get_object()
+        if order.payment_status != "pending" or order.order_status != "pending":
+            return Response({"error": "Only pending orders can be cancelled."}, status=400)
+        order.delete()
+        return Response({"message": "Order cancelled."})
+
+    @action(detail=True, methods=["post"], url_path="retry-payment")
+    def retry_payment(self, request, pk=None):
+        """Create a fresh Razorpay order for a specific pending order, applying wallet choice."""
+        order = self.get_object()
+
+        if order.payment_status != "pending" or order.order_status != "pending":
+            return Response({"error": "Only pending orders can be retried."}, status=400)
+
+        try:
+            wallet_amount = Decimal(str(request.data.get("wallet_amount", "0"))).quantize(Decimal("0.01"), ROUND_HALF_UP)
+        except Exception:
+            wallet_amount = Decimal("0")
+
+        try:
+            wallet = Wallet.objects.get(user=request.user)
+            wallet_amount = min(wallet_amount, wallet.balance, order.amount_payable)
+        except Wallet.DoesNotExist:
+            wallet_amount = Decimal("0")
+
+        razorpay_amount = (order.amount_payable - wallet_amount).quantize(Decimal("0.01"), ROUND_HALF_UP)
+        order.wallet_used     = wallet_amount
+        order.razorpay_amount = razorpay_amount
+
+        result = {
+            "internal_order_id": str(order.id),
+            "amount_payable":    str(order.amount_payable),
+            "wallet_used":       str(wallet_amount),
+            "razorpay_amount":   str(razorpay_amount),
+            "razorpay_order_id": "",
+            "razorpay_key_id":   "",
+        }
+
+        if razorpay_amount > Decimal("0"):
+            amount_paise = int((razorpay_amount * 100).quantize(Decimal("1")))
+            rz = create_razorpay_order(amount_paise)
+            order.razorpay_order_id = rz["razorpay_order_id"]
+            result["razorpay_order_id"] = rz["razorpay_order_id"]
+            from django.conf import settings as djsettings
+            if not djsettings.MOCK_PAYMENT_MODE:
+                result["razorpay_key_id"] = djsettings.RAZORPAY_KEY_ID
+
+        order.save(update_fields=["wallet_used", "razorpay_amount", "razorpay_order_id"])
+        return Response(result)
 
 
 # ── Admin Orders ──────────────────────────────────────────────────────────────
