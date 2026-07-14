@@ -210,7 +210,7 @@ class CheckoutInitiateView(LoginRequiredMixin, APIView):
                     status=400,
                 )
 
-        subtotal, upa_discount, amount_payable, _ = _compute_cart_totals(cart)
+        subtotal, upa_discount, amount_payable, items_data = _compute_cart_totals(cart)
 
         # Wallet cap
         wallet_amount = min(data["wallet_amount"], amount_payable)
