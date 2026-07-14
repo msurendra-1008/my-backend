@@ -140,7 +140,7 @@ class CheckoutInitiateSerializer(serializers.Serializer):
 
 class CheckoutConfirmSerializer(serializers.Serializer):
     internal_order_id   = serializers.UUIDField()
-    address_id          = serializers.UUIDField(required=False, allow_null=True)
+    address_id          = serializers.UUIDField()
     wallet_amount       = serializers.DecimalField(
         max_digits=12, decimal_places=2, min_value=Decimal("0"), default=Decimal("0")
     )
