@@ -500,6 +500,38 @@ class UserOrderViewSet(LoginRequiredMixin, viewsets.ReadOnlyModelViewSet):
             "satisfied_at": order.satisfied_at,
         })
 
+    @action(detail=True, methods=["post"], url_path="retry-payment")
+    def retry_payment(self, request, pk=None):
+        """Re-initiate Razorpay for a pending payment order."""
+        order = self.get_object()
+
+        if order.payment_status != "pending" or order.order_status != "pending":
+            return Response(
+                {"error": "Only orders with pending payment can be retried."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        razorpay_amount = order.razorpay_amount
+
+        result = {
+            "internal_order_id": str(order.id),
+            "razorpay_amount":   str(razorpay_amount),
+            "razorpay_order_id": "",
+            "razorpay_key_id":   "",
+        }
+
+        if razorpay_amount > Decimal("0"):
+            amount_paise = int((razorpay_amount * 100).quantize(Decimal("1")))
+            rz = create_razorpay_order(amount_paise)
+            order.razorpay_order_id = rz["razorpay_order_id"]
+            order.save(update_fields=["razorpay_order_id"])
+            result["razorpay_order_id"] = rz["razorpay_order_id"]
+            from django.conf import settings as djsettings
+            if not djsettings.MOCK_PAYMENT_MODE:
+                result["razorpay_key_id"] = djsettings.RAZORPAY_KEY_ID
+
+        return Response(result)
+
 
 # ── Admin Orders ──────────────────────────────────────────────────────────────
 
