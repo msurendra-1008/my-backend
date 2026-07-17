@@ -116,9 +116,47 @@ def update_delivery_status(assignment, new_status, updated_by=None,
         created_by=updated_by,
     )
 
+    from apps.orders.models import OrderItem, RETURN_EXCHANGE_STATUSES
+
     if new_status == 'picked_up':
         OrderModel.objects.filter(pk=assignment.order_id).update(order_status='shipped')
+        OrderItem.objects.filter(
+            order_id=assignment.order_id,
+        ).exclude(status__in=RETURN_EXCHANGE_STATUSES).update(status='shipped')
+
     elif new_status == 'delivered':
+        now = timezone.now()
         OrderModel.objects.filter(pk=assignment.order_id).update(order_status='delivered')
+        items_qs = OrderItem.objects.filter(
+            order_id=assignment.order_id,
+        ).exclude(status__in=RETURN_EXCHANGE_STATUSES)
+        items_qs.filter(delivered_at__isnull=True).update(status='delivered', delivered_at=now)
+        items_qs.filter(delivered_at__isnull=False).update(status='delivered')
+
+        # Open commission return window — mirrors AdminOrderViewSet.partial_update
+        try:
+            from apps.commissions.models import CommissionBreakup
+            from apps.returns.models import ReturnSettings
+            from datetime import timedelta
+            order_obj = OrderModel.objects.get(pk=assignment.order_id)
+            window_days = ReturnSettings.get().return_window_days
+            for item in order_obj.items.exclude(status__in=RETURN_EXCHANGE_STATUSES):
+                try:
+                    breakup = item.commission_breakup
+                    if breakup.return_window_expires is None:
+                        delivered_time = item.delivered_at or now
+                        breakup.return_window_expires = delivered_time + timedelta(days=window_days)
+                        breakup.save()
+                except CommissionBreakup.DoesNotExist:
+                    pass
+        except Exception:
+            pass
+
+    elif new_status == 'failed':
+        # Reset to packed so admin can reassign
+        OrderModel.objects.filter(pk=assignment.order_id).update(order_status='packed')
+        OrderItem.objects.filter(
+            order_id=assignment.order_id,
+        ).exclude(status__in=RETURN_EXCHANGE_STATUSES).update(status='packed')
 
     return assignment
