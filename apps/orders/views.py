@@ -926,4 +926,11 @@ class AdminOrderViewSet(LoginRequiredMixin, viewsets.ModelViewSet):
             except Exception:
                 pass
 
+        # Re-fetch with fresh item data — queryset .update() doesn't
+        # invalidate the prefetch cache on the in-memory order instance.
+        order = Order.objects.select_related("user").prefetch_related(
+            "items",
+            "items__commission_breakup",
+            "items__commission_breakup__entries",
+        ).get(pk=order.pk)
         return Response(OrderDetailSerializer(order).data)
