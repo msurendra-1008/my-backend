@@ -120,5 +120,8 @@ def update_delivery_status(assignment, new_status, updated_by=None,
         OrderModel.objects.filter(pk=assignment.order_id).update(order_status='shipped')
     elif new_status == 'delivered':
         OrderModel.objects.filter(pk=assignment.order_id).update(order_status='delivered')
+    elif new_status == 'failed':
+        # Reset to packed so admin can reassign; order was never actually delivered
+        OrderModel.objects.filter(pk=assignment.order_id).update(order_status='packed')
 
     return assignment
