@@ -99,7 +99,7 @@ class CommissionBreakupViewSet(viewsets.ReadOnlyModelViewSet):
     def process_all(self, request):
         now = timezone.now()
         expired_qs = CommissionBreakup.objects.filter(
-            status='pending_window',
+            status__in=['pending_window', 'exchange_hold'],
             return_window_expires__lte=now,
         )
         processed_ids = []
