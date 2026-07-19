@@ -604,28 +604,80 @@ class UserOrderViewSet(LoginRequiredMixin, viewsets.ReadOnlyModelViewSet):
         if order.is_satisfied:
             return Response({"error": "Order already marked as satisfied."}, status=status.HTTP_400_BAD_REQUEST)
 
+        # Block if any item has an active return or exchange request
+        from apps.returns.models import ReturnRequest, ACTIVE_REQUEST_STATUSES
+        active_items = (
+            ReturnRequest.objects
+            .filter(order_item__order=order, status__in=ACTIVE_REQUEST_STATUSES)
+            .values_list('order_item__product_name', flat=True)
+        )
+        if active_items.exists():
+            names = ', '.join(active_items[:3])
+            return Response(
+                {"error": f"Cannot mark as satisfied while return/exchange requests are pending for: {names}."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Block if any exchange buffer is still active (window not yet expired).
+        # We hold the entire order's commission until all items are clear.
+        from apps.commissions.models import CommissionBreakup as CB
+        active_buffers = CB.objects.filter(
+            order_item__order=order,
+            status='exchange_hold',
+            return_window_expires__gt=timezone.now(),
+        )
+        if active_buffers.exists():
+            latest_expiry = active_buffers.order_by('-return_window_expires').first().return_window_expires
+            local_expiry  = timezone.localtime(latest_expiry)
+            return Response(
+                {"error": (
+                    f"Exchange buffer active until {local_expiry.strftime('%d %b %Y, %I:%M %p')}. "
+                    "Commission will be released automatically after that."
+                )},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         with transaction.atomic():
             order.is_satisfied = True
             order.satisfied_at = timezone.now()
             order.satisfied_by = request.user
             order.save(update_fields=["is_satisfied", "satisfied_at", "satisfied_by"])
 
-            from apps.commissions.utils import process_commission_breakup
-            for item in order.items.prefetch_related("commission_breakup").all():
-                try:
-                    breakup = item.commission_breakup
-                    if breakup.status == "pending_window":
-                        process_commission_breakup(breakup, processed_by=request.user)
-                except Exception:
-                    pass
+            # Credit the entire order's commission in one pass once all items are clear.
+            # — pending_window items: cleanly delivered, no return/exchange
+            # — exchange_hold items: exchange resolved, buffer expired
+            # Cancelled breakups (returned items) are skipped automatically.
+            if order.order_status == 'delivered':
+                from apps.commissions.utils import process_commission_breakup
+                now = timezone.now()
+                for item in order.items.select_related("commission_breakup").all():
+                    try:
+                        breakup = item.commission_breakup
+                        if breakup.status == 'pending_window' and item.status == 'delivered':
+                            process_commission_breakup(breakup, processed_by=request.user)
+                        elif (
+                            breakup.status == 'exchange_hold'
+                            and breakup.return_window_expires
+                            and breakup.return_window_expires <= now
+                        ):
+                            process_commission_breakup(breakup, processed_by=request.user)
+                    except Exception:
+                        pass
 
-            order.items.all().update(
+            # Lock out returns on cleanly delivered items —
+            # items already in a return/exchange flow keep their own state.
+            order.items.filter(status='delivered').update(
                 return_window_blocked=True,
                 return_window_blocked_reason="satisfied",
             )
 
+        if order.order_status == 'delivered':
+            message = "Order marked as satisfied. Commissions credited to upline wallets."
+        else:
+            message = "Order marked as satisfied. Commissions will be credited once the order is delivered."
+
         return Response({
-            "message": "Order marked as satisfied. Commissions credited to upline wallets.",
+            "message": message,
             "satisfied_at": order.satisfied_at,
         })
 
@@ -909,6 +961,7 @@ class AdminOrderViewSet(LoginRequiredMixin, viewsets.ModelViewSet):
         if new_order_status == 'delivered':
             try:
                 from apps.commissions.models import CommissionBreakup
+                from apps.commissions.utils import process_commission_breakup
                 from apps.returns.models import ReturnSettings
                 from datetime import timedelta
                 from django.utils import timezone
@@ -923,6 +976,17 @@ class AdminOrderViewSet(LoginRequiredMixin, viewsets.ModelViewSet):
                             breakup.save()
                     except CommissionBreakup.DoesNotExist:
                         pass
+
+                # If the customer already marked this order satisfied, credit
+                # commissions now that delivery is confirmed.
+                if order.is_satisfied:
+                    for item in order.items.exclude(status__in=RETURN_EXCHANGE_STATUSES):
+                        try:
+                            breakup = item.commission_breakup
+                            if breakup.status == 'pending_window':
+                                process_commission_breakup(breakup, processed_by=request.user)
+                        except Exception:
+                            pass
             except Exception:
                 pass
 

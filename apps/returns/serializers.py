@@ -15,11 +15,16 @@ from .utils import is_return_eligible
 class ReturnSettingsSerializer(serializers.ModelSerializer):
     class Meta:
         model  = ReturnSettings
-        fields = ["return_window_days", "max_attempts", "predefined_reasons"]
+        fields = ["return_window_days", "exchange_buffer_days", "max_attempts", "predefined_reasons"]
 
     def validate_return_window_days(self, value):
         if value < 1 or value > 90:
             raise serializers.ValidationError("Return window must be between 1 and 90 days.")
+        return value
+
+    def validate_exchange_buffer_days(self, value):
+        if value < 1 or value > 30:
+            raise serializers.ValidationError("Exchange buffer must be between 1 and 30 days.")
         return value
 
     def validate_max_attempts(self, value):
