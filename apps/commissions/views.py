@@ -98,9 +98,17 @@ class CommissionBreakupViewSet(viewsets.ReadOnlyModelViewSet):
     @action(detail=False, methods=['post'], url_path='process-all')
     def process_all(self, request):
         now = timezone.now()
+        # Statuses that mean a return/exchange decision is still pending —
+        # commission must not be credited until admin resolves the request.
+        BLOCKING_ITEM_STATUSES = [
+            'return_requested', 'return_approved',
+            'exchange_requested', 'exchange_approved',
+        ]
         expired_qs = CommissionBreakup.objects.filter(
             status__in=['pending_window', 'exchange_hold'],
             return_window_expires__lte=now,
+        ).exclude(
+            order_item__status__in=BLOCKING_ITEM_STATUSES,
         )
         processed_ids = []
         errors = []
