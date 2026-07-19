@@ -151,6 +151,21 @@ def process_approved_return(return_request, admin_user=None, admin_notes=""):
     return_request.order_item.status = "refunded"
     return_request.order_item.save(update_fields=["status"])
 
+    # Cancel commission breakup — item returned, no commission should be paid
+    try:
+        from apps.commissions.models import CommissionBreakup
+        breakup = return_request.order_item.commission_breakup
+        if breakup.status in ('pending_window', 'exchange_hold'):
+            breakup.entries.filter(
+                status__in=('pending_window', 'pending')
+            ).update(status='cancelled')
+            breakup.status = 'cancelled'
+            breakup.save(update_fields=['status'])
+    except CommissionBreakup.DoesNotExist:
+        pass
+    except Exception:
+        pass
+
     # Log
     create_log(return_request, "completed", actor=admin_user,
                notes=admin_notes or f"Approved — refund ₹{refund_amount}")
@@ -239,6 +254,22 @@ def process_approved_exchange(return_request, admin_user=None, admin_notes=""):
     # Update OrderItem
     return_request.order_item.status = "exchanged"
     return_request.order_item.save(update_fields=["status"])
+
+    # Put commission on exchange hold — credit only after buffer window expires
+    try:
+        from apps.commissions.models import CommissionBreakup
+        from apps.returns.models import ReturnSettings as _RS
+        from datetime import timedelta
+        buffer_days = _RS.get().exchange_buffer_days
+        breakup = return_request.order_item.commission_breakup
+        if breakup.status in ('pending_window',):
+            breakup.status = 'exchange_hold'
+            breakup.return_window_expires = timezone.now() + timedelta(days=buffer_days)
+            breakup.save(update_fields=['status', 'return_window_expires'])
+    except CommissionBreakup.DoesNotExist:
+        pass
+    except Exception:
+        pass
 
     # Finalise request
     return_request.refund_amount = refund_amount
