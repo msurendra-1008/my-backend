@@ -136,6 +136,7 @@ def update_delivery_status(assignment, new_status, updated_by=None,
         # Open commission return window — mirrors AdminOrderViewSet.partial_update
         try:
             from apps.commissions.models import CommissionBreakup
+            from apps.commissions.utils import process_commission_breakup
             from apps.returns.models import ReturnSettings
             from datetime import timedelta
             order_obj = OrderModel.objects.get(pk=assignment.order_id)
@@ -149,6 +150,17 @@ def update_delivery_status(assignment, new_status, updated_by=None,
                         breakup.save()
                 except CommissionBreakup.DoesNotExist:
                     pass
+
+            # If the customer already marked this order satisfied, credit
+            # commissions now that delivery is confirmed.
+            if order_obj.is_satisfied:
+                for item in order_obj.items.exclude(status__in=RETURN_EXCHANGE_STATUSES):
+                    try:
+                        breakup = item.commission_breakup
+                        if breakup.status == 'pending_window':
+                            process_commission_breakup(breakup)
+                    except Exception:
+                        pass
         except Exception:
             pass
 

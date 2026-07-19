@@ -610,22 +610,32 @@ class UserOrderViewSet(LoginRequiredMixin, viewsets.ReadOnlyModelViewSet):
             order.satisfied_by = request.user
             order.save(update_fields=["is_satisfied", "satisfied_at", "satisfied_by"])
 
-            from apps.commissions.utils import process_commission_breakup
-            for item in order.items.prefetch_related("commission_breakup").all():
-                try:
-                    breakup = item.commission_breakup
-                    if breakup.status == "pending_window":
-                        process_commission_breakup(breakup, processed_by=request.user)
-                except Exception:
-                    pass
+            # Credit commissions only if the order has already been delivered.
+            # If not yet delivered, the commission will be credited when the
+            # delivery partner (or admin) marks the order as delivered and
+            # is_satisfied is already True at that point.
+            if order.order_status == 'delivered':
+                from apps.commissions.utils import process_commission_breakup
+                for item in order.items.prefetch_related("commission_breakup").all():
+                    try:
+                        breakup = item.commission_breakup
+                        if breakup.status == "pending_window":
+                            process_commission_breakup(breakup, processed_by=request.user)
+                    except Exception:
+                        pass
 
             order.items.all().update(
                 return_window_blocked=True,
                 return_window_blocked_reason="satisfied",
             )
 
+        if order.order_status == 'delivered':
+            message = "Order marked as satisfied. Commissions credited to upline wallets."
+        else:
+            message = "Order marked as satisfied. Commissions will be credited once the order is delivered."
+
         return Response({
-            "message": "Order marked as satisfied. Commissions credited to upline wallets.",
+            "message": message,
             "satisfied_at": order.satisfied_at,
         })
 
@@ -909,6 +919,7 @@ class AdminOrderViewSet(LoginRequiredMixin, viewsets.ModelViewSet):
         if new_order_status == 'delivered':
             try:
                 from apps.commissions.models import CommissionBreakup
+                from apps.commissions.utils import process_commission_breakup
                 from apps.returns.models import ReturnSettings
                 from datetime import timedelta
                 from django.utils import timezone
@@ -923,6 +934,17 @@ class AdminOrderViewSet(LoginRequiredMixin, viewsets.ModelViewSet):
                             breakup.save()
                     except CommissionBreakup.DoesNotExist:
                         pass
+
+                # If the customer already marked this order satisfied, credit
+                # commissions now that delivery is confirmed.
+                if order.is_satisfied:
+                    for item in order.items.exclude(status__in=RETURN_EXCHANGE_STATUSES):
+                        try:
+                            breakup = item.commission_breakup
+                            if breakup.status == 'pending_window':
+                                process_commission_breakup(breakup, processed_by=request.user)
+                        except Exception:
+                            pass
             except Exception:
                 pass
 
