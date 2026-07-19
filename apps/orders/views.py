@@ -604,19 +604,32 @@ class UserOrderViewSet(LoginRequiredMixin, viewsets.ReadOnlyModelViewSet):
         if order.is_satisfied:
             return Response({"error": "Order already marked as satisfied."}, status=status.HTTP_400_BAD_REQUEST)
 
+        # Block if any item has an active return or exchange request
+        from apps.returns.models import ReturnRequest, ACTIVE_REQUEST_STATUSES
+        active_items = (
+            ReturnRequest.objects
+            .filter(order_item__order=order, status__in=ACTIVE_REQUEST_STATUSES)
+            .values_list('order_item__product_name', flat=True)
+        )
+        if active_items.exists():
+            names = ', '.join(active_items[:3])
+            return Response(
+                {"error": f"Cannot mark as satisfied while return/exchange requests are pending for: {names}."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         with transaction.atomic():
             order.is_satisfied = True
             order.satisfied_at = timezone.now()
             order.satisfied_by = request.user
             order.save(update_fields=["is_satisfied", "satisfied_at", "satisfied_by"])
 
-            # Credit commissions only if the order has already been delivered.
-            # If not yet delivered, the commission will be credited when the
-            # delivery partner (or admin) marks the order as delivered and
-            # is_satisfied is already True at that point.
+            # Credit commission only for fully delivered items.
+            # Returned (refunded) and exchanged items are skipped —
+            # their breakups are cancelled or on exchange_hold respectively.
             if order.order_status == 'delivered':
                 from apps.commissions.utils import process_commission_breakup
-                for item in order.items.prefetch_related("commission_breakup").all():
+                for item in order.items.filter(status='delivered').prefetch_related("commission_breakup"):
                     try:
                         breakup = item.commission_breakup
                         if breakup.status == "pending_window":
@@ -624,7 +637,9 @@ class UserOrderViewSet(LoginRequiredMixin, viewsets.ReadOnlyModelViewSet):
                     except Exception:
                         pass
 
-            order.items.all().update(
+            # Only block returns on items that are cleanly delivered —
+            # items already in a return/exchange flow keep their own state.
+            order.items.filter(status='delivered').update(
                 return_window_blocked=True,
                 return_window_blocked_reason="satisfied",
             )

@@ -87,9 +87,11 @@ class ProductCommissionRule(BaseModel):
 class CommissionBreakup(BaseModel):
     STATUS_CHOICES = [
         ('pending_window', 'Waiting for return window'),
+        ('exchange_hold',  'On hold — exchange buffer'),
         ('processing',     'Being processed'),
         ('completed',      'All credits done'),
         ('partial',        'Some pending'),
+        ('cancelled',      'Cancelled — item returned'),
     ]
     order_item            = models.OneToOneField('orders.OrderItem', on_delete=models.CASCADE, related_name='commission_breakup')
     total_base_amount     = models.DecimalField(max_digits=12, decimal_places=2)
@@ -118,6 +120,7 @@ class CommissionEntry(BaseModel):
         ('pending',        'Pending — user inactive'),
         ('vacant',         'Vacant leg — skipped'),
         ('ignored',        'Ignored by admin'),
+        ('cancelled',      'Cancelled — item returned'),
     ]
     LEG_CHOICES = [
         ('left', 'Left'), ('middle', 'Middle'), ('right', 'Right'),

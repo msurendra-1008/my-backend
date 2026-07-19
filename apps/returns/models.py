@@ -18,9 +18,10 @@ DEFAULT_REASONS = [
 
 
 class ReturnSettings(BaseModel):
-    return_window_days = models.PositiveIntegerField(default=7)
-    max_attempts       = models.PositiveIntegerField(default=2)
-    predefined_reasons = models.JSONField(default=list)
+    return_window_days   = models.PositiveIntegerField(default=7)
+    exchange_buffer_days = models.PositiveIntegerField(default=1)
+    max_attempts         = models.PositiveIntegerField(default=2)
+    predefined_reasons   = models.JSONField(default=list)
     updated_by         = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
         null=True, blank=True, related_name="return_settings_updates",
