@@ -598,8 +598,8 @@ class UserOrderViewSet(LoginRequiredMixin, viewsets.ReadOnlyModelViewSet):
         if order.user != request.user:
             return Response({"error": "Not authorized."}, status=status.HTTP_403_FORBIDDEN)
 
-        if order.order_status not in ["confirmed", "packed", "shipped", "delivered"]:
-            return Response({"error": "Order cannot be marked satisfied."}, status=status.HTTP_400_BAD_REQUEST)
+        if order.order_status != "delivered":
+            return Response({"error": "Order cannot be marked as satisfied until it has been delivered."}, status=status.HTTP_400_BAD_REQUEST)
 
         if order.is_satisfied:
             return Response({"error": "Order already marked as satisfied."}, status=status.HTTP_400_BAD_REQUEST)
@@ -647,22 +647,21 @@ class UserOrderViewSet(LoginRequiredMixin, viewsets.ReadOnlyModelViewSet):
             # — pending_window items: cleanly delivered, no return/exchange
             # — exchange_hold items: exchange resolved, buffer expired
             # Cancelled breakups (returned items) are skipped automatically.
-            if order.order_status == 'delivered':
-                from apps.commissions.utils import process_commission_breakup
-                now = timezone.now()
-                for item in order.items.select_related("commission_breakup").all():
-                    try:
-                        breakup = item.commission_breakup
-                        if breakup.status == 'pending_window' and item.status == 'delivered':
-                            process_commission_breakup(breakup, processed_by=request.user)
-                        elif (
-                            breakup.status == 'exchange_hold'
-                            and breakup.return_window_expires
-                            and breakup.return_window_expires <= now
-                        ):
-                            process_commission_breakup(breakup, processed_by=request.user)
-                    except Exception:
-                        pass
+            from apps.commissions.utils import process_commission_breakup
+            now = timezone.now()
+            for item in order.items.select_related("commission_breakup").all():
+                try:
+                    breakup = item.commission_breakup
+                    if breakup.status == 'pending_window' and item.status == 'delivered':
+                        process_commission_breakup(breakup, processed_by=request.user)
+                    elif (
+                        breakup.status == 'exchange_hold'
+                        and breakup.return_window_expires
+                        and breakup.return_window_expires <= now
+                    ):
+                        process_commission_breakup(breakup, processed_by=request.user)
+                except Exception:
+                    pass
 
             # Lock out returns on cleanly delivered items —
             # items already in a return/exchange flow keep their own state.
@@ -671,13 +670,8 @@ class UserOrderViewSet(LoginRequiredMixin, viewsets.ReadOnlyModelViewSet):
                 return_window_blocked_reason="satisfied",
             )
 
-        if order.order_status == 'delivered':
-            message = "Order marked as satisfied. Commissions credited to upline wallets."
-        else:
-            message = "Order marked as satisfied. Commissions will be credited once the order is delivered."
-
         return Response({
-            "message": message,
+            "message": "Order marked as satisfied. Commissions credited to upline wallets.",
             "satisfied_at": order.satisfied_at,
         })
 
