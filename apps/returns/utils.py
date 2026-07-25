@@ -30,7 +30,7 @@ def is_return_eligible(order_item):
     if order_item.return_rejection_count >= settings.max_attempts:
         return False, "Maximum return attempts reached for this item."
 
-    if order_item.status != "delivered":
+    if order_item.status not in ("delivered", "exchanged"):
         return False, "Item must be delivered before raising a return or exchange request."
 
     if not order_item.delivered_at:
