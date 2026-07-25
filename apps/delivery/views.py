@@ -20,7 +20,8 @@ from .serializers import (
 from .utils import (
     find_eligible_partners, assign_order_to_partner,
     auto_assign_if_enabled, update_delivery_status,
-    assign_exchange_to_partner, auto_assign_exchange_if_enabled,
+    create_exchange_assignment, assign_exchange_to_partner,
+    auto_assign_exchange_if_enabled,
 )
 from .duty_utils import toggle_duty, get_monthly_ledger, generate_monthly_report_html
 
@@ -158,6 +159,43 @@ class DeliveryAssignmentViewSet(LoginRequiredMixin, viewsets.ReadOnlyModelViewSe
 
         return Response(DeliveryAssignmentSerializer(assignment).data)
 
+    @extend_schema(
+        tags=['Delivery'], summary='Manually assign a partner to an exchange delivery',
+        request=inline_serializer('AssignExchangeRequest', fields={
+            'assignment_id': s.UUIDField(),
+            'partner_id':    s.UUIDField(),
+        }),
+    )
+    @action(detail=False, methods=['post'], url_path='assign-exchange')
+    def assign_exchange(self, request):
+        assignment_id = request.data.get('assignment_id')
+        partner_id    = request.data.get('partner_id')
+
+        if not assignment_id or not partner_id:
+            return Response({'detail': 'assignment_id and partner_id required.'}, status=400)
+
+        try:
+            assignment = DeliveryAssignment.objects.get(pk=assignment_id, assignment_type='exchange')
+            partner    = DeliveryPartner.objects.get(pk=partner_id)
+        except DeliveryAssignment.DoesNotExist:
+            return Response({'detail': 'Exchange assignment not found.'}, status=404)
+        except DeliveryPartner.DoesNotExist:
+            return Response({'detail': 'Partner not found.'}, status=404)
+
+        assignment.partner = partner
+        assignment.status  = 'assigned'
+        assignment.save(update_fields=['partner', 'status', 'updated_at'])
+
+        from .models import DeliveryStatusLog
+        DeliveryStatusLog.objects.create(
+            assignment=assignment,
+            status='assigned',
+            notes=f'Exchange delivery manually assigned to {partner.user.full_name}',
+            created_by=request.user,
+        )
+
+        return Response(DeliveryAssignmentSerializer(assignment).data)
+
 
 # ── Admin: unassigned packed orders ───────────────────────────────────────────
 
@@ -186,6 +224,41 @@ class UnassignedOrdersView(LoginRequiredMixin, generics.ListAPIView):
             }
             for o in orders
         ]
+        return Response(data)
+
+
+# ── Admin: unassigned exchange deliveries ────────────────────────────────────
+
+class UnassignedExchangesView(LoginRequiredMixin, generics.ListAPIView):
+    """Exchange delivery assignments that have no partner assigned yet."""
+    permission_classes = [IsAdmin]
+
+    def list(self, request, *args, **kwargs):
+        assignments = (
+            DeliveryAssignment.objects
+            .filter(assignment_type='exchange', partner__isnull=True)
+            .exclude(status__in=['delivered', 'cancelled'])
+            .select_related(
+                'exchange_request__order_item__order',
+                'exchange_request__order_item',
+            )
+            .order_by('-created_at')
+        )
+        data = []
+        for a in assignments:
+            rr   = a.exchange_request
+            item = rr.order_item if rr else None
+            order = item.order if item else None
+            data.append({
+                'assignment_id':   str(a.id),
+                'order_number':    order.order_number    if order else None,
+                'customer_name':   order.address_name    if order else None,
+                'address_city':    order.address_city    if order else None,
+                'address_pincode': order.address_pincode if order else None,
+                'product_name':    item.product_name     if item else None,
+                'variant_name':    item.variant_name     if item else None,
+                'quantity':        rr.return_qty         if rr else None,
+            })
         return Response(data)
 
 

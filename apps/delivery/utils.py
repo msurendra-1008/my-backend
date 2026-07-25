@@ -84,6 +84,19 @@ def auto_assign_if_enabled(order, assigned_by=None):
         return None
 
 
+def create_exchange_assignment(return_request):
+    """Ensure an unassigned DeliveryAssignment exists for an exchange request."""
+    from .models import DeliveryAssignment
+    assignment, _ = DeliveryAssignment.objects.get_or_create(
+        exchange_request=return_request,
+        defaults={
+            'assignment_type': 'exchange',
+            'status':          'assigned',
+        },
+    )
+    return assignment
+
+
 def assign_exchange_to_partner(return_request, partner, assigned_by=None):
     """Create or update a DeliveryAssignment for an exchange request."""
     from .models import DeliveryAssignment, DeliveryStatusLog

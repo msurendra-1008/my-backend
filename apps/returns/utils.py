@@ -207,8 +207,10 @@ def process_approved_exchange(return_request, admin_user=None, admin_notes=""):
         return_request.exchange_variant_id = variant_id
         return_request.save(update_fields=['exchange_variant'])
 
-    # Create delivery assignment and auto-assign partner if settings allow
-    from apps.delivery.utils import auto_assign_exchange_if_enabled
+    # Always create an exchange delivery assignment (unassigned).
+    # Then try to auto-assign a partner if the setting allows.
+    from apps.delivery.utils import create_exchange_assignment, auto_assign_exchange_if_enabled
+    create_exchange_assignment(return_request)
     auto_assign_exchange_if_enabled(return_request, assigned_by=admin_user)
 
     # Move request to exchange_dispatched — delivery partner will complete it
