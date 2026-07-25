@@ -60,7 +60,7 @@ class ReturnRequestViewSet(LoginRequiredMixin, viewsets.GenericViewSet):
         return qs.filter(raised_by=user)
 
     def get_permissions(self):
-        if self.action in {"approve", "reject"}:
+        if self.action in {"approve", "reject", "confirm_pickup_received"}:
             return [IsAdmin()]
         if self.action in {"admin_list", "admin_detail", "request_info"}:
             return [IsAdminOrEmployee()]
