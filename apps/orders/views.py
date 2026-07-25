@@ -604,11 +604,11 @@ class UserOrderViewSet(LoginRequiredMixin, viewsets.ReadOnlyModelViewSet):
         if order.is_satisfied:
             return Response({"error": "Order already marked as satisfied."}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Block if any item has an active return or exchange request
-        from apps.returns.models import ReturnRequest, ACTIVE_REQUEST_STATUSES
+        # Block if any item has an active/in-progress return or exchange request
+        from apps.returns.models import ReturnRequest, BLOCKING_REQUEST_STATUSES
         active_items = (
             ReturnRequest.objects
-            .filter(order_item__order=order, status__in=ACTIVE_REQUEST_STATUSES)
+            .filter(order_item__order=order, status__in=BLOCKING_REQUEST_STATUSES)
             .values_list('order_item__product_name', flat=True)
         )
         if active_items.exists():
