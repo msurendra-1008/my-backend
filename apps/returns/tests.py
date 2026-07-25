@@ -191,55 +191,46 @@ class ReturnRequestTests(TestCase):
         self.assertEqual(resp.status_code, 400)
 
     # 6 ──────────────────────────────────────────────────────────────────────
-    def test_exchange_with_out_of_stock_variant(self):
-        """Exchange request with an out-of-stock variant must return 400."""
+    def test_exchange_request_created_without_variant_id(self):
+        """Exchange request succeeds without exchange_variant_id — uses same variant."""
         self.client.force_authenticate(user=self.user)
         item = make_delivered_item(self.user, qty=1)
 
-        # Create a second variant of the same product with 0 stock
-        other_variant, _ = ProductVariant.objects.get_or_create(
-            product=item.variant.product, sku="SKU-OOS",
-            defaults={
-                "name": "OOS Variant", "variant_type": "size",
-                "mrp": Decimal("500"), "upa_price_override": Decimal("400"),
-                "stock_quantity": 0, "is_active": True,
-            },
-        )
         resp = self.client.post("/api/v1/returns/", {
-            "order_item_id":      str(item.id),
-            "request_type":       "exchange",
-            "return_qty":         1,
-            "exchange_variant_id": str(other_variant.id),
-            "reason":             "Size/variant issue",
+            "order_item_id": str(item.id),
+            "request_type":  "exchange",
+            "return_qty":    1,
+            "reason":        "Defective product",
         })
-        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(resp.status_code, 201, resp.data)
+        # exchange_variant should be set to the item's own variant
+        from apps.returns.models import ReturnRequest
+        rr = ReturnRequest.objects.get(pk=resp.data["id"])
+        self.assertEqual(rr.exchange_variant_id, item.variant_id)
 
     # 7 ──────────────────────────────────────────────────────────────────────
-    def test_exchange_variant_must_be_same_product(self):
-        """Exchange with a variant from a different product returns 400."""
+    def test_exchange_allowed_even_if_variant_out_of_stock(self):
+        """Exchange request is accepted even when variant has 0 stock; admin decides at approval."""
         self.client.force_authenticate(user=self.user)
         item = make_delivered_item(self.user, qty=1)
 
-        # Different product — supply a unique sku so it doesn't conflict
-        cat, _ = Category.objects.get_or_create(name="Cat2", slug="cat2")
-        other_prod = Product.objects.create(
-            name="Other Product", slug="other-prod-7",
-            category=cat, mrp=Decimal("500"), sku="PROD-OTHER-7",
-        )
-        other_variant = ProductVariant.objects.create(
-            product=other_prod, sku="SKU-DIFF-PROD",
-            name="Other V", variant_type="size",
-            mrp=Decimal("500"), upa_price_override=Decimal("400"),
-            stock_quantity=10, is_active=True,
-        )
+        # Zero out the variant's stock
+        item.variant.stock_quantity = 0
+        item.variant.save(update_fields=["stock_quantity"])
+
         resp = self.client.post("/api/v1/returns/", {
-            "order_item_id":      str(item.id),
-            "request_type":       "exchange",
-            "return_qty":         1,
-            "exchange_variant_id": str(other_variant.id),
-            "reason":             "Size/variant issue",
+            "order_item_id": str(item.id),
+            "request_type":  "exchange",
+            "return_qty":    1,
+            "reason":        "Defective product",
         })
-        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(resp.status_code, 201, resp.data)
+
+        # Admin approval should fail because stock is 0
+        self.client.force_authenticate(user=self.admin)
+        resp2 = self.client.patch(f"/api/v1/returns/{resp.data['id']}/approve/")
+        self.assertEqual(resp2.status_code, 400)
+        self.assertIn("out of stock", resp2.data.get("detail", "").lower())
 
     # 8 ──────────────────────────────────────────────────────────────────────
     def test_upload_photo_saved_and_max_3_enforced(self):
@@ -304,43 +295,34 @@ class ReturnRequestTests(TestCase):
         self.assertEqual(item.status, "refunded")
 
     # 10 ─────────────────────────────────────────────────────────────────────
-    def test_admin_approves_exchange_adjusts_stock_both_ways(self):
-        """Approve exchange → old stock up, new stock down, item → exchanged."""
+    def test_admin_approves_exchange_dispatches_delivery(self):
+        """Approve exchange → exchange_dispatched status; stock unchanged until partner OTP."""
         self.client.force_authenticate(user=self.user)
         item = make_delivered_item(self.user, qty=1)
 
-        # Create a second variant with sufficient stock
-        other_variant, _ = ProductVariant.objects.get_or_create(
-            product=item.variant.product, sku="SKU-EX",
-            defaults={
-                "name": "Exchange V", "variant_type": "size",
-                "mrp": Decimal("500"), "upa_price_override": Decimal("400"),
-                "stock_quantity": 5, "is_active": True,
-            },
-        )
-        old_stock_before  = item.variant.stock_quantity
-        new_stock_before  = other_variant.stock_quantity
+        stock_before = item.variant.stock_quantity
 
         resp = self.client.post("/api/v1/returns/", {
-            "order_item_id":      str(item.id),
-            "request_type":       "exchange",
-            "return_qty":         1,
-            "exchange_variant_id": str(other_variant.id),
-            "reason":             "Size/variant issue",
+            "order_item_id": str(item.id),
+            "request_type":  "exchange",
+            "return_qty":    1,
+            "reason":        "Defective product",
         })
+        self.assertEqual(resp.status_code, 201, resp.data)
         rr_id = resp.data["id"]
 
         self.client.force_authenticate(user=self.admin)
         resp2 = self.client.patch(f"/api/v1/returns/{rr_id}/approve/")
         self.assertEqual(resp2.status_code, 200, resp2.data)
 
-        item.variant.refresh_from_db()
-        other_variant.refresh_from_db()
-        self.assertEqual(item.variant.stock_quantity, old_stock_before + 1)
-        self.assertEqual(other_variant.stock_quantity, new_stock_before - 1)
+        # Status must be exchange_dispatched; stock must not change yet
+        from apps.returns.models import ReturnRequest
+        rr = ReturnRequest.objects.get(pk=rr_id)
+        self.assertEqual(rr.status, "exchange_dispatched")
 
-        item.refresh_from_db()
-        self.assertEqual(item.status, "exchanged")
+        item.variant.refresh_from_db()
+        self.assertEqual(item.variant.stock_quantity, stock_before,
+                         "Stock must not change at approval — only at partner OTP confirmation")
 
     # 11 ─────────────────────────────────────────────────────────────────────
     def test_admin_rejects_reverts_item_to_delivered(self):

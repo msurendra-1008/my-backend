@@ -93,30 +93,13 @@ class ReturnRequestCreateSerializer(serializers.ModelSerializer):
                 {"return_qty": "Return quantity cannot exceed ordered quantity."}
             )
 
-        exchange_variant_id = data.get("exchange_variant_id")
         if data["request_type"] == "exchange":
-            if not exchange_variant_id:
-                raise serializers.ValidationError(
-                    {"exchange_variant_id": "Exchange variant is required for exchange requests."}
-                )
-            exv = get_object_or_404(ProductVariant, pk=exchange_variant_id)
-
             if not order_item.variant_id:
                 raise serializers.ValidationError(
-                    {"exchange_variant_id": "Original variant not found on this order item."}
+                    {"order_item_id": "Cannot raise an exchange — variant not recorded on this order item."}
                 )
-            if exv.product_id != order_item.variant.product_id:
-                raise serializers.ValidationError(
-                    {"exchange_variant_id": "Exchange variant must be a variant of the same product."}
-                )
-            if exv.pk == order_item.variant_id:
-                raise serializers.ValidationError(
-                    {"exchange_variant_id": "Exchange variant must differ from the ordered variant."}
-                )
-            if exv.stock_quantity < data["return_qty"]:
-                raise serializers.ValidationError(
-                    {"exchange_variant_id": "Selected exchange variant does not have sufficient stock."}
-                )
+            # Exchange is always same-variant replacement; ignore any client-supplied exchange_variant_id
+            exv = get_object_or_404(ProductVariant, pk=order_item.variant_id)
             data["_exchange_variant"] = exv
         else:
             data["_exchange_variant"] = None

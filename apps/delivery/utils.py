@@ -84,8 +84,65 @@ def auto_assign_if_enabled(order, assigned_by=None):
         return None
 
 
+def create_exchange_assignment(return_request):
+    """Ensure an unassigned DeliveryAssignment exists for an exchange request."""
+    from .models import DeliveryAssignment
+    assignment, _ = DeliveryAssignment.objects.get_or_create(
+        exchange_request=return_request,
+        defaults={
+            'assignment_type': 'exchange',
+            'status':          'assigned',
+        },
+    )
+    return assignment
+
+
+def assign_exchange_to_partner(return_request, partner, assigned_by=None):
+    """Create or update a DeliveryAssignment for an exchange request."""
+    from .models import DeliveryAssignment, DeliveryStatusLog
+
+    assignment, created = DeliveryAssignment.objects.get_or_create(
+        exchange_request=return_request,
+        defaults={
+            'assignment_type': 'exchange',
+            'partner':         partner,
+            'status':          'assigned',
+        },
+    )
+    if not created:
+        assignment.partner = partner
+        assignment.status  = 'assigned'
+        assignment.save(update_fields=['partner', 'status', 'updated_at'])
+
+    DeliveryStatusLog.objects.create(
+        assignment=assignment,
+        status='assigned',
+        notes=f'Exchange delivery assigned to {partner.user.full_name}',
+        created_by=assigned_by,
+    )
+    return assignment
+
+
+def auto_assign_exchange_if_enabled(return_request, assigned_by=None):
+    """Auto-assign an exchange delivery if auto_assign is enabled. Never raises."""
+    try:
+        from .models import DeliverySettings
+        cfg = DeliverySettings.get()
+        if not cfg.auto_assign:
+            return None
+        # Use the original order's address for zone matching
+        order = return_request.order_item.order
+        partner = suggest_partner_for_order(order)
+        if not partner:
+            return None
+        return assign_exchange_to_partner(return_request, partner, assigned_by=assigned_by)
+    except Exception:
+        return None
+
+
 def update_delivery_status(assignment, new_status, updated_by=None,
-                            notes='', proof_image=None, failure_reason=''):
+                            notes='', proof_image=None, failure_reason='',
+                            skip_order_sync=False):
     """Update assignment status, log it, and sync the parent order status."""
     from .models import DeliveryStatusLog
     from apps.orders.models import Order as OrderModel
@@ -115,6 +172,9 @@ def update_delivery_status(assignment, new_status, updated_by=None,
         notes=notes,
         created_by=updated_by,
     )
+
+    if skip_order_sync:
+        return assignment
 
     from apps.orders.models import OrderItem, RETURN_EXCHANGE_STATUSES
 

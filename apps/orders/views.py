@@ -582,14 +582,24 @@ class UserOrderViewSet(LoginRequiredMixin, viewsets.ReadOnlyModelViewSet):
     )
     @action(detail=True, methods=["get"], url_path="delivery-otp")
     def delivery_otp(self, request, pk=None):
+        from apps.delivery.models import DeliveryAssignment
         order = self.get_object()
+        # Check regular delivery assignment
         try:
             assignment = order.delivery_assignment
             if assignment.status in ('assigned', 'picked_up'):
-                return Response({'otp': assignment.otp, 'status': assignment.status})
+                return Response({'otp': assignment.otp, 'status': assignment.status, 'assignment_type': 'order'})
         except Exception:
             pass
-        return Response({'otp': None, 'status': None})
+        # Check exchange delivery assignment (linked via return request, not order FK)
+        exchange_assignment = DeliveryAssignment.objects.filter(
+            assignment_type='exchange',
+            exchange_request__order_item__order=order,
+            status__in=('assigned', 'picked_up'),
+        ).first()
+        if exchange_assignment:
+            return Response({'otp': exchange_assignment.otp, 'status': exchange_assignment.status, 'assignment_type': 'exchange'})
+        return Response({'otp': None, 'status': None, 'assignment_type': None})
 
     @action(detail=True, methods=["post"], url_path="mark-satisfied")
     def mark_satisfied(self, request, pk=None):
@@ -604,11 +614,11 @@ class UserOrderViewSet(LoginRequiredMixin, viewsets.ReadOnlyModelViewSet):
         if order.is_satisfied:
             return Response({"error": "Order already marked as satisfied."}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Block if any item has an active return or exchange request
-        from apps.returns.models import ReturnRequest, ACTIVE_REQUEST_STATUSES
+        # Block if any item has an active/in-progress return or exchange request
+        from apps.returns.models import ReturnRequest, BLOCKING_REQUEST_STATUSES
         active_items = (
             ReturnRequest.objects
-            .filter(order_item__order=order, status__in=ACTIVE_REQUEST_STATUSES)
+            .filter(order_item__order=order, status__in=BLOCKING_REQUEST_STATUSES)
             .values_list('order_item__product_name', flat=True)
         )
         if active_items.exists():
