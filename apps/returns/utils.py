@@ -175,109 +175,135 @@ def process_approved_return(return_request, admin_user=None, admin_notes=""):
 
 @transaction.atomic
 def process_approved_exchange(return_request, admin_user=None, admin_notes=""):
+    """
+    Called when admin approves an exchange request.
+    - Verifies stock is available for the replacement item
+    - Creates an exchange delivery assignment (reuses delivery partner flow)
+    - Auto-assigns a partner based on delivery settings
+    - Stock deduction, commission change, and order item update happen later
+      when the delivery partner confirms delivery with OTP
+    """
     from apps.products.models import ProductVariant
-    from apps.products.utils import get_upa_price
-    from apps.wallet.models import Wallet, WalletTransaction
 
-    new_variant = return_request.exchange_variant
-    if not new_variant:
-        raise ValueError("Exchange variant not specified.")
+    # Exchange is same-variant replacement (send the same item fresh)
+    variant_id = (
+        return_request.exchange_variant_id
+        or return_request.order_item.variant_id
+    )
+    if not variant_id:
+        raise ValueError("Cannot determine the variant for this exchange.")
 
-    # Lock new variant and verify stock
-    new_v = ProductVariant.objects.select_for_update().get(pk=new_variant.pk)
+    # Lock and verify sufficient stock exists for the replacement
+    new_v = ProductVariant.objects.select_for_update().get(pk=variant_id)
     if new_v.stock_quantity < return_request.return_qty:
-        raise ValueError("Requested exchange variant is out of stock.")
+        raise ValueError(
+            f"'{new_v.name}' is out of stock "
+            f"({new_v.stock_quantity} available, {return_request.return_qty} needed). "
+            "You can convert this to a return to refund the customer instead."
+        )
 
-    # Restock old variant — return to original rack if known
-    old_variant_id = return_request.order_item.variant_id
-    if old_variant_id:
-        qty = return_request.return_qty
-        restocked = False
-        try:
-            from apps.warehouse.models import StockMovement
-            from apps.warehouse.utils import assign_stock_to_rack
-            last_inbound = (
-                StockMovement.objects.filter(variant_id=old_variant_id, movement_type='inbound')
-                .order_by('-created_at')
-                .first()
-            )
-            if last_inbound:
-                old_v_obj = ProductVariant.objects.get(pk=old_variant_id)
-                assign_stock_to_rack(
-                    rack=last_inbound.rack,
-                    variant=old_v_obj,
-                    quantity=qty,
-                    reference=str(return_request.id),
-                    notes='Exchange restock (old variant)',
-                )
-                restocked = True
-        except Exception:
-            pass
-        if not restocked:
-            ProductVariant.objects.filter(pk=old_variant_id).update(
-                stock_quantity=models.F("stock_quantity") + qty
-            )
+    # Ensure exchange_variant is always set to the resolved variant
+    if not return_request.exchange_variant_id:
+        return_request.exchange_variant_id = variant_id
+        return_request.save(update_fields=['exchange_variant'])
 
-    # Deduct new variant (FIFO from racks)
+    # Create delivery assignment and auto-assign partner if settings allow
+    from apps.delivery.utils import auto_assign_exchange_if_enabled
+    auto_assign_exchange_if_enabled(return_request, assigned_by=admin_user)
+
+    # Move request to exchange_dispatched — delivery partner will complete it
+    return_request.status     = "exchange_dispatched"
+    return_request.waiting_for = ""
+    return_request.save(update_fields=["status", "waiting_for"])
+
+
+# ── Complete exchange delivery (called by delivery partner OTP confirmation) ──
+
+@transaction.atomic
+def complete_exchange_delivery(assignment, completed_by=None):
+    """
+    Called when the delivery partner confirms the exchange with customer OTP.
+    One-trip model: partner delivers new item and picks up defective item.
+
+    Side effects (in order):
+    1. Restock the defective variant coming back from customer
+    2. Deduct the fresh replacement variant from warehouse
+    3. Update OrderItem: status → 'exchanged', delivered_at → now
+    4. Reset commission window: exchange_hold with return_window_expires = now + window_days
+    5. Close ReturnRequest: status → 'completed'
+    """
+    from apps.products.models import ProductVariant
+    from apps.commissions.models import CommissionBreakup
+
+    rr         = assignment.exchange_request
+    order_item = rr.order_item
+    qty        = rr.return_qty
+    now        = timezone.now()
+
+    variant_id = rr.exchange_variant_id or order_item.variant_id
+    if not variant_id:
+        raise ValueError("Exchange variant not resolved on return request.")
+
+    # 1. Restock the defective item coming back to warehouse
+    restocked = False
+    try:
+        from apps.warehouse.models import StockMovement
+        from apps.warehouse.utils import assign_stock_to_rack
+        last_in = (
+            StockMovement.objects
+            .filter(variant_id=variant_id, movement_type='inbound')
+            .order_by('-created_at')
+            .first()
+        )
+        if last_in:
+            old_v = ProductVariant.objects.get(pk=variant_id)
+            assign_stock_to_rack(
+                rack=last_in.rack, variant=old_v, quantity=qty,
+                reference=str(rr.id), notes='Exchange restock — defective item returned',
+            )
+            restocked = True
+    except Exception:
+        pass
+    if not restocked:
+        ProductVariant.objects.filter(pk=variant_id).update(
+            stock_quantity=models.F('stock_quantity') + qty
+        )
+
+    # 2. Deduct the fresh replacement variant from warehouse
     try:
         from apps.warehouse.utils import deduct_stock as fifo_deduct
-        fifo_deduct(new_v, return_request.return_qty, reference=str(return_request.id))
-    except (ValueError, Exception):
-        ProductVariant.objects.filter(pk=new_v.pk).update(
-            stock_quantity=models.F("stock_quantity") - return_request.return_qty
+        fresh_v = ProductVariant.objects.select_for_update().get(pk=variant_id)
+        fifo_deduct(fresh_v, qty, reference=str(rr.id))
+    except Exception:
+        ProductVariant.objects.filter(pk=variant_id).update(
+            stock_quantity=models.F('stock_quantity') - qty
         )
 
-    # Credit price difference if new variant is cheaper
-    old_upa   = Decimal(return_request.order_item.upa_price)
-    new_price = get_upa_price(new_v)
-    new_upa   = Decimal(new_price["upa_price"])
-    price_diff = (old_upa - new_upa) * return_request.return_qty
+    # 3. Update OrderItem
+    order_item.status       = 'exchanged'
+    order_item.delivered_at = now
+    order_item.save(update_fields=['status', 'delivered_at'])
 
-    refund_amount = None
-    if price_diff > Decimal("0"):
-        wallet, _ = Wallet.objects.get_or_create(user=return_request.raised_by)
-        wallet.balance += price_diff
-        wallet.save(update_fields=["balance"])
-
-        WalletTransaction.objects.create(
-            wallet=wallet,
-            type="credit",
-            amount=price_diff,
-            reason=(
-                f"Exchange credit — {return_request.order_item.product_name}"
-            ),
-            reference=str(return_request.id),
-            triggered_by=return_request.reviewed_by,
-        )
-        refund_amount = price_diff
-
-    # Update OrderItem
-    return_request.order_item.status = "exchanged"
-    return_request.order_item.save(update_fields=["status"])
-
-    # Put commission on exchange hold — credit only after buffer window expires
+    # 4. Reset commission window — exchange_hold starts from new delivery date
     try:
-        from apps.commissions.models import CommissionBreakup
-        from apps.returns.models import ReturnSettings as _RS
+        from .models import ReturnSettings
         from datetime import timedelta
-        buffer_days = _RS.get().exchange_buffer_days
-        breakup = return_request.order_item.commission_breakup
-        if breakup.status in ('pending_window',):
+        window_days = ReturnSettings.get().return_window_days
+        breakup = order_item.commission_breakup
+        if breakup.status in ('pending_window', 'exchange_hold'):
             breakup.status = 'exchange_hold'
-            breakup.return_window_expires = timezone.now() + timedelta(days=buffer_days)
+            breakup.return_window_expires = now + timedelta(days=window_days)
             breakup.save(update_fields=['status', 'return_window_expires'])
     except CommissionBreakup.DoesNotExist:
         pass
     except Exception:
         pass
 
-    # Finalise request
-    return_request.refund_amount = refund_amount
-    return_request.status        = "completed"
-    return_request.waiting_for   = ""
-    return_request.completed_at  = timezone.now()
-    return_request.save(update_fields=["refund_amount", "status", "waiting_for", "completed_at"])
+    # 5. Close ReturnRequest
+    rr.status       = 'completed'
+    rr.waiting_for  = ''
+    rr.completed_at = now
+    rr.save(update_fields=['status', 'waiting_for', 'completed_at'])
 
-    # Log
-    create_log(return_request, "completed", actor=admin_user,
-               notes=admin_notes or "Exchange approved")
+    create_log(rr, 'completed', actor=completed_by,
+               notes='Exchange completed — new item delivered, defective item collected')

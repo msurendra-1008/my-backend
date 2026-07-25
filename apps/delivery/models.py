@@ -8,6 +8,7 @@ from django.db import models
 from django.utils import timezone
 
 from apps.orders.models import Order
+from apps.returns.models import ReturnRequest
 
 IST = pytz.timezone('Asia/Kolkata')
 
@@ -165,9 +166,22 @@ class DeliveryAssignment(models.Model):
         ('cancelled', 'Cancelled'),
     ]
 
-    id             = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    order          = models.OneToOneField(
-        Order, on_delete=models.CASCADE, related_name='delivery_assignment'
+    ASSIGNMENT_TYPE_CHOICES = [
+        ('order',    'Order Delivery'),
+        ('exchange', 'Exchange Delivery'),
+    ]
+
+    id               = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    assignment_type  = models.CharField(
+        max_length=20, choices=ASSIGNMENT_TYPE_CHOICES, default='order'
+    )
+    order            = models.OneToOneField(
+        Order, on_delete=models.CASCADE, related_name='delivery_assignment',
+        null=True, blank=True,
+    )
+    exchange_request = models.OneToOneField(
+        ReturnRequest, on_delete=models.CASCADE, related_name='exchange_delivery',
+        null=True, blank=True,
     )
     partner        = models.ForeignKey(
         DeliveryPartner, on_delete=models.SET_NULL,
@@ -188,7 +202,9 @@ class DeliveryAssignment(models.Model):
         ordering = ['-created_at']
 
     def __str__(self):
-        return f'Delivery for {self.order.order_number}'
+        if self.assignment_type == 'exchange' and self.exchange_request:
+            return f'Exchange delivery for {self.exchange_request.order_item.product_name}'
+        return f'Delivery for {self.order.order_number if self.order else "—"}'
 
 
 class DeliveryStatusLog(models.Model):

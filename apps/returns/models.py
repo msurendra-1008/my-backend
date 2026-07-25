@@ -61,13 +61,20 @@ REQUEST_TYPE_CHOICES = [
 ]
 
 REQUEST_STATUS_CHOICES = [
-    ("raised",          "Raised"),
-    ("under_review",    "Under Review"),
-    ("approved",        "Approved"),
-    ("rejected",        "Rejected"),
-    ("rejected_final",  "Rejected Final"),
-    ("completed",       "Completed"),
+    ("raised",               "Raised"),
+    ("under_review",         "Under Review"),
+    ("approved",             "Approved"),
+    ("exchange_dispatched",  "Exchange Dispatched"),
+    ("rejected",             "Rejected"),
+    ("rejected_final",       "Rejected Final"),
+    ("completed",            "Completed"),
 ]
+
+# Admin can act on these (approve / reject / request-info)
+ACTIVE_REQUEST_STATUSES = ["raised", "under_review", "approved"]
+
+# These block mark_satisfied and commission credit for the whole order
+BLOCKING_REQUEST_STATUSES = ["raised", "under_review", "approved", "exchange_dispatched"]
 
 WAITING_FOR_CHOICES = [
     ("admin", "Admin"),
@@ -79,8 +86,6 @@ REFUND_MODE_CHOICES = [
     ("wallet",          "Wallet"),
     ("original_source", "Original Source"),
 ]
-
-ACTIVE_REQUEST_STATUSES = {"raised", "under_review", "approved"}
 
 LOG_ACTION_CHOICES = [
     ("raised",        "Raised"),

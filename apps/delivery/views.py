@@ -20,6 +20,7 @@ from .serializers import (
 from .utils import (
     find_eligible_partners, assign_order_to_partner,
     auto_assign_if_enabled, update_delivery_status,
+    assign_exchange_to_partner, auto_assign_exchange_if_enabled,
 )
 from .duty_utils import toggle_duty, get_monthly_ledger, generate_monthly_report_html
 
@@ -201,7 +202,11 @@ class PartnerMyAssignmentsView(LoginRequiredMixin, generics.ListAPIView):
             return DeliveryAssignment.objects.none()
 
         status_filter = self.request.query_params.get('status', '')
-        qs = DeliveryAssignment.objects.filter(partner=partner).select_related('order').prefetch_related('logs')
+        qs = DeliveryAssignment.objects.filter(partner=partner).select_related(
+            'order',
+            'exchange_request__order_item__order',
+            'exchange_request__order_item__variant',
+        ).prefetch_related('logs')
         if status_filter:
             qs = qs.filter(status=status_filter)
         return qs
@@ -256,13 +261,30 @@ class PartnerUpdateStatusView(LoginRequiredMixin, generics.UpdateAPIView):
                     status=400,
                 )
 
-        assignment = update_delivery_status(
-            assignment, new_status,
-            updated_by=request.user,
-            notes=notes,
-            proof_image=proof_image,
-            failure_reason=failure_reason,
-        )
+        if new_status == 'delivered' and assignment.assignment_type == 'exchange':
+            # Exchange delivery: complete the exchange flow
+            try:
+                from apps.returns.utils import complete_exchange_delivery
+                complete_exchange_delivery(assignment, completed_by=request.user)
+            except ValueError as exc:
+                return Response({'detail': str(exc)}, status=400)
+            # Record the delivered status on the assignment itself
+            assignment = update_delivery_status(
+                assignment, new_status,
+                updated_by=request.user,
+                notes=notes or 'Exchange delivery confirmed via OTP',
+                proof_image=proof_image,
+                failure_reason=failure_reason,
+                skip_order_sync=True,   # order/item sync handled by complete_exchange_delivery
+            )
+        else:
+            assignment = update_delivery_status(
+                assignment, new_status,
+                updated_by=request.user,
+                notes=notes,
+                proof_image=proof_image,
+                failure_reason=failure_reason,
+            )
         return Response(PartnerAssignmentSerializer(assignment).data)
 
 
