@@ -3,7 +3,7 @@ from rest_framework.routers import DefaultRouter
 from .views import (
     DeliveryZoneViewSet, DeliveryPartnerViewSet,
     DeliverySettingsView, DeliveryAssignmentViewSet,
-    UnassignedOrdersView, UnassignedExchangesView,
+    UnassignedOrdersView, UnassignedExchangesView, UnassignedReturnPickupsView,
     PartnerMyAssignmentsView, PartnerUpdateStatusView,
     PartnerToggleDutyView, PartnerDutyStatusView, PartnerDutyLedgerView,
     AdminPartnerDutyLedgerView, AdminPartnerDutyReportView,
@@ -19,6 +19,7 @@ urlpatterns = [
     path('settings/', DeliverySettingsView.as_view(), name='delivery-settings'),
     path('admin/unassigned/',          UnassignedOrdersView.as_view(),    name='delivery-unassigned'),
     path('admin/unassigned-exchanges/', UnassignedExchangesView.as_view(), name='delivery-unassigned-exchanges'),
+    path('admin/unassigned-return-pickups/', UnassignedReturnPickupsView.as_view(), name='delivery-unassigned-return-pickups'),
     path('my-assignments/', PartnerMyAssignmentsView.as_view(), name='partner-assignments'),
     path('my-assignments/<uuid:pk>/update-status/', PartnerUpdateStatusView.as_view(), name='partner-update-status'),
     # Duty — partner

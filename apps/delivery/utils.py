@@ -140,6 +140,61 @@ def auto_assign_exchange_if_enabled(return_request, assigned_by=None):
         return None
 
 
+def create_return_pickup_assignment(return_request):
+    """Ensure an unassigned DeliveryAssignment exists for a return pickup."""
+    from .models import DeliveryAssignment
+    assignment, _ = DeliveryAssignment.objects.get_or_create(
+        return_request=return_request,
+        defaults={
+            'assignment_type': 'return',
+            'status':          'assigned',
+        },
+    )
+    return assignment
+
+
+def assign_return_to_partner(return_request, partner, assigned_by=None):
+    """Create or update a DeliveryAssignment for a return pickup."""
+    from .models import DeliveryAssignment, DeliveryStatusLog
+
+    assignment, created = DeliveryAssignment.objects.get_or_create(
+        return_request=return_request,
+        defaults={
+            'assignment_type': 'return',
+            'partner':         partner,
+            'status':          'assigned',
+        },
+    )
+    if not created:
+        assignment.partner = partner
+        assignment.status  = 'assigned'
+        assignment.save(update_fields=['partner', 'status', 'updated_at'])
+
+    DeliveryStatusLog.objects.create(
+        assignment=assignment,
+        status='assigned',
+        notes=f'Return pickup assigned to {partner.user.full_name}',
+        created_by=assigned_by,
+    )
+    return assignment
+
+
+def auto_assign_return_if_enabled(return_request, assigned_by=None):
+    """Auto-assign a return pickup if auto_assign is enabled. Never raises."""
+    try:
+        from .models import DeliverySettings
+        cfg = DeliverySettings.get()
+        if not cfg.auto_assign:
+            return None
+        order = return_request.order_item.order
+        partner = suggest_partner_for_order(order)
+        if not partner:
+            return None
+        return assign_return_to_partner(return_request, partner, assigned_by=assigned_by)
+    except Exception:
+        return None
+
+
 def update_delivery_status(assignment, new_status, updated_by=None,
                             notes='', proof_image=None, failure_reason='',
                             skip_order_sync=False):

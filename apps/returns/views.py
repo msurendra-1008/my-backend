@@ -60,7 +60,7 @@ class ReturnRequestViewSet(LoginRequiredMixin, viewsets.GenericViewSet):
         return qs.filter(raised_by=user)
 
     def get_permissions(self):
-        if self.action in {"approve", "reject"}:
+        if self.action in {"approve", "reject", "confirm_pickup_received"}:
             return [IsAdmin()]
         if self.action in {"admin_list", "admin_detail", "request_info"}:
             return [IsAdminOrEmployee()]
@@ -279,6 +279,26 @@ class ReturnRequestViewSet(LoginRequiredMixin, viewsets.GenericViewSet):
         log_action = "rejected_final" if is_final else "rejected"
         create_log(rr, log_action, actor=request.user, notes=admin_notes)
 
+        rr.refresh_from_db()
+        return Response(ReturnRequestAdminSerializer(rr).data)
+
+    # ── Admin: confirm return item received ──────────────────────────────────────
+
+    @action(detail=True, methods=["post"], url_path="confirm-pickup-received",
+            permission_classes=[IsAdmin])
+    def confirm_pickup_received(self, request, pk=None):
+        rr = get_object_or_404(ReturnRequest, pk=pk, request_type='return', status='pickup_dispatched')
+        try:
+            a = rr.return_pickup
+        except Exception:
+            return Response({'detail': 'No return pickup assignment found.'}, status=400)
+        if a.status != 'delivered':
+            return Response({'detail': 'Item has not been handed over to company yet.'}, status=400)
+        try:
+            from apps.returns.utils import complete_return_pickup
+            complete_return_pickup(a, confirmed_by=request.user)
+        except ValueError as exc:
+            return Response({'detail': str(exc)}, status=400)
         rr.refresh_from_db()
         return Response(ReturnRequestAdminSerializer(rr).data)
 

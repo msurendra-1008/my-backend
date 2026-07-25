@@ -175,7 +175,24 @@ class ReturnRequestSerializer(serializers.ModelSerializer):
 # ── Request — admin update ────────────────────────────────────────────────────
 
 class ReturnRequestAdminSerializer(ReturnRequestSerializer):
-    admin_notes = serializers.CharField(required=False, allow_blank=True)
+    admin_notes      = serializers.CharField(required=False, allow_blank=True)
+    pickup_assignment = serializers.SerializerMethodField()
 
     class Meta(ReturnRequestSerializer.Meta):
-        pass
+        fields = ReturnRequestSerializer.Meta.fields + ['pickup_assignment']
+
+    def get_pickup_assignment(self, obj):
+        if obj.request_type != 'return':
+            return None
+        try:
+            a = obj.return_pickup
+            return {
+                'id':             str(a.id),
+                'status':         a.status,
+                'partner_name':   a.partner.user.full_name if a.partner else None,
+                'partner_mobile': a.partner.user.mobile if a.partner else None,
+                'picked_up_at':   a.picked_up_at,
+                'delivered_at':   a.delivered_at,
+            }
+        except Exception:
+            return None

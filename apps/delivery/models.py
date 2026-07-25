@@ -169,6 +169,7 @@ class DeliveryAssignment(models.Model):
     ASSIGNMENT_TYPE_CHOICES = [
         ('order',    'Order Delivery'),
         ('exchange', 'Exchange Delivery'),
+        ('return',   'Return Pickup'),
     ]
 
     id               = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -181,6 +182,10 @@ class DeliveryAssignment(models.Model):
     )
     exchange_request = models.OneToOneField(
         ReturnRequest, on_delete=models.CASCADE, related_name='exchange_delivery',
+        null=True, blank=True,
+    )
+    return_request = models.OneToOneField(
+        ReturnRequest, on_delete=models.CASCADE, related_name='return_pickup',
         null=True, blank=True,
     )
     partner        = models.ForeignKey(
@@ -204,6 +209,8 @@ class DeliveryAssignment(models.Model):
     def __str__(self):
         if self.assignment_type == 'exchange' and self.exchange_request:
             return f'Exchange delivery for {self.exchange_request.order_item.product_name}'
+        if self.assignment_type == 'return' and self.return_request:
+            return f'Return pickup for {self.return_request.order_item.product_name}'
         return f'Delivery for {self.order.order_number if self.order else "—"}'
 
 

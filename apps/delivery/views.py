@@ -22,6 +22,7 @@ from .utils import (
     auto_assign_if_enabled, update_delivery_status,
     create_exchange_assignment, assign_exchange_to_partner,
     auto_assign_exchange_if_enabled,
+    create_return_pickup_assignment, assign_return_to_partner,
 )
 from .duty_utils import toggle_duty, get_monthly_ledger, generate_monthly_report_html
 
@@ -196,6 +197,43 @@ class DeliveryAssignmentViewSet(LoginRequiredMixin, viewsets.ReadOnlyModelViewSe
 
         return Response(DeliveryAssignmentSerializer(assignment).data)
 
+    @extend_schema(
+        tags=['Delivery'], summary='Manually assign a partner to a return pickup',
+        request=inline_serializer('AssignReturnPickupRequest', fields={
+            'assignment_id': s.UUIDField(),
+            'partner_id':    s.UUIDField(),
+        }),
+    )
+    @action(detail=False, methods=['post'], url_path='assign-return-pickup')
+    def assign_return_pickup(self, request):
+        assignment_id = request.data.get('assignment_id')
+        partner_id    = request.data.get('partner_id')
+
+        if not assignment_id or not partner_id:
+            return Response({'detail': 'assignment_id and partner_id required.'}, status=400)
+
+        try:
+            assignment = DeliveryAssignment.objects.get(pk=assignment_id, assignment_type='return')
+            partner    = DeliveryPartner.objects.get(pk=partner_id)
+        except DeliveryAssignment.DoesNotExist:
+            return Response({'detail': 'Return pickup assignment not found.'}, status=404)
+        except DeliveryPartner.DoesNotExist:
+            return Response({'detail': 'Partner not found.'}, status=404)
+
+        assignment.partner = partner
+        assignment.status  = 'assigned'
+        assignment.save(update_fields=['partner', 'status', 'updated_at'])
+
+        from .models import DeliveryStatusLog
+        DeliveryStatusLog.objects.create(
+            assignment=assignment,
+            status='assigned',
+            notes=f'Return pickup manually assigned to {partner.user.full_name}',
+            created_by=request.user,
+        )
+
+        return Response(DeliveryAssignmentSerializer(assignment).data)
+
 
 # ── Admin: unassigned packed orders ───────────────────────────────────────────
 
@@ -262,6 +300,42 @@ class UnassignedExchangesView(LoginRequiredMixin, generics.ListAPIView):
         return Response(data)
 
 
+# ── Admin: unassigned return pickups ─────────────────────────────────────────
+
+class UnassignedReturnPickupsView(LoginRequiredMixin, generics.ListAPIView):
+    """Return pickup assignments that have no partner assigned yet."""
+    permission_classes = [IsAdmin]
+
+    def list(self, request, *args, **kwargs):
+        assignments = (
+            DeliveryAssignment.objects
+            .filter(assignment_type='return', partner__isnull=True)
+            .exclude(status__in=['delivered', 'cancelled'])
+            .select_related(
+                'return_request__order_item__order',
+                'return_request__order_item',
+            )
+            .order_by('-created_at')
+        )
+        data = []
+        for a in assignments:
+            rr    = a.return_request
+            item  = rr.order_item if rr else None
+            order = item.order if item else None
+            data.append({
+                'assignment_id':   str(a.id),
+                'order_number':    order.order_number    if order else None,
+                'customer_name':   order.address_name    if order else None,
+                'address_city':    order.address_city    if order else None,
+                'address_pincode': order.address_pincode if order else None,
+                'product_name':    item.product_name     if item else None,
+                'variant_name':    item.variant_name     if item else None,
+                'quantity':        rr.return_qty         if rr else None,
+                'refund_amount':   str(rr.refund_amount) if (rr and rr.refund_amount) else None,
+            })
+        return Response(data)
+
+
 # ── Partner (self) endpoints ──────────────────────────────────────────────────
 
 class PartnerMyAssignmentsView(LoginRequiredMixin, generics.ListAPIView):
@@ -279,6 +353,8 @@ class PartnerMyAssignmentsView(LoginRequiredMixin, generics.ListAPIView):
             'order',
             'exchange_request__order_item__order',
             'exchange_request__order_item__variant',
+            'return_request__order_item__order',
+            'return_request__order_item__variant',
         ).prefetch_related('logs')
         if status_filter:
             qs = qs.filter(status=status_filter)
@@ -321,7 +397,21 @@ class PartnerUpdateStatusView(LoginRequiredMixin, generics.UpdateAPIView):
         if new_status == 'delivered' and assignment.status != 'picked_up':
             return Response({'detail': 'Must pick up before marking delivered.'}, status=400)
 
-        if new_status == 'delivered':
+        # OTP gate — at picked_up for returns (collect from customer),
+        #            at delivered for orders/exchanges (confirm at destination)
+        if assignment.assignment_type == 'return' and new_status == 'picked_up':
+            otp_input = request.data.get('otp_input', '').strip()
+            if not otp_input:
+                return Response(
+                    {'detail': 'OTP is required to confirm collection from customer.'},
+                    status=400,
+                )
+            if otp_input != assignment.otp:
+                return Response(
+                    {'detail': 'Incorrect OTP. Please ask the customer for the correct code.'},
+                    status=400,
+                )
+        elif assignment.assignment_type != 'return' and new_status == 'delivered':
             otp_input = request.data.get('otp_input', '').strip()
             if not otp_input:
                 return Response(
@@ -335,20 +425,29 @@ class PartnerUpdateStatusView(LoginRequiredMixin, generics.UpdateAPIView):
                 )
 
         if new_status == 'delivered' and assignment.assignment_type == 'exchange':
-            # Exchange delivery: complete the exchange flow
+            # Exchange: complete exchange atomically at OTP confirmation
             try:
                 from apps.returns.utils import complete_exchange_delivery
                 complete_exchange_delivery(assignment, completed_by=request.user)
             except ValueError as exc:
                 return Response({'detail': str(exc)}, status=400)
-            # Record the delivered status on the assignment itself
             assignment = update_delivery_status(
                 assignment, new_status,
                 updated_by=request.user,
                 notes=notes or 'Exchange delivery confirmed via OTP',
                 proof_image=proof_image,
                 failure_reason=failure_reason,
-                skip_order_sync=True,   # order/item sync handled by complete_exchange_delivery
+                skip_order_sync=True,
+            )
+        elif new_status == 'delivered' and assignment.assignment_type == 'return':
+            # Return: partner handed over to company — financial ops wait for admin confirmation
+            assignment = update_delivery_status(
+                assignment, new_status,
+                updated_by=request.user,
+                notes=notes or 'Item handed over to company by delivery partner',
+                proof_image=proof_image,
+                failure_reason=failure_reason,
+                skip_order_sync=True,
             )
         else:
             assignment = update_delivery_status(
@@ -357,6 +456,7 @@ class PartnerUpdateStatusView(LoginRequiredMixin, generics.UpdateAPIView):
                 notes=notes,
                 proof_image=proof_image,
                 failure_reason=failure_reason,
+                skip_order_sync=assignment.assignment_type in ('exchange', 'return'),
             )
         return Response(PartnerAssignmentSerializer(assignment).data)
 
