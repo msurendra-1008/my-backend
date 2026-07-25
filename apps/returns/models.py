@@ -65,6 +65,7 @@ REQUEST_STATUS_CHOICES = [
     ("under_review",         "Under Review"),
     ("approved",             "Approved"),
     ("exchange_dispatched",  "Exchange Dispatched"),
+    ("pickup_dispatched",    "Pickup Dispatched"),
     ("rejected",             "Rejected"),
     ("rejected_final",       "Rejected Final"),
     ("completed",            "Completed"),
@@ -74,7 +75,7 @@ REQUEST_STATUS_CHOICES = [
 ACTIVE_REQUEST_STATUSES = ["raised", "under_review", "approved"]
 
 # These block mark_satisfied and commission credit for the whole order
-BLOCKING_REQUEST_STATUSES = ["raised", "under_review", "approved", "exchange_dispatched"]
+BLOCKING_REQUEST_STATUSES = ["raised", "under_review", "approved", "exchange_dispatched", "pickup_dispatched"]
 
 WAITING_FOR_CHOICES = [
     ("admin", "Admin"),

@@ -282,6 +282,26 @@ class ReturnRequestViewSet(LoginRequiredMixin, viewsets.GenericViewSet):
         rr.refresh_from_db()
         return Response(ReturnRequestAdminSerializer(rr).data)
 
+    # ── Admin: confirm return item received ──────────────────────────────────────
+
+    @action(detail=True, methods=["post"], url_path="confirm-pickup-received",
+            permission_classes=[IsAdmin])
+    def confirm_pickup_received(self, request, pk=None):
+        rr = get_object_or_404(ReturnRequest, pk=pk, request_type='return', status='pickup_dispatched')
+        try:
+            a = rr.return_pickup
+        except Exception:
+            return Response({'detail': 'No return pickup assignment found.'}, status=400)
+        if a.status != 'delivered':
+            return Response({'detail': 'Item has not been handed over to company yet.'}, status=400)
+        try:
+            from apps.returns.utils import complete_return_pickup
+            complete_return_pickup(a, confirmed_by=request.user)
+        except ValueError as exc:
+            return Response({'detail': str(exc)}, status=400)
+        rr.refresh_from_db()
+        return Response(ReturnRequestAdminSerializer(rr).data)
+
     # ── Admin: request more info ──────────────────────────────────────────────
 
     @action(detail=True, methods=["patch"], url_path="request-info",

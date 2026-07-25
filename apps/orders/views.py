@@ -599,6 +599,14 @@ class UserOrderViewSet(LoginRequiredMixin, viewsets.ReadOnlyModelViewSet):
         ).first()
         if exchange_assignment:
             return Response({'otp': exchange_assignment.otp, 'status': exchange_assignment.status, 'assignment_type': 'exchange'})
+        # Check return pickup assignment — OTP is at picked_up stage (customer confirms collection)
+        return_assignment = DeliveryAssignment.objects.filter(
+            assignment_type='return',
+            return_request__order_item__order=order,
+            status='assigned',
+        ).first()
+        if return_assignment:
+            return Response({'otp': return_assignment.otp, 'status': return_assignment.status, 'assignment_type': 'return'})
         return Response({'otp': None, 'status': None, 'assignment_type': None})
 
     @action(detail=True, methods=["post"], url_path="mark-satisfied")

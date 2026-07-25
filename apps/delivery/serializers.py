@@ -94,6 +94,8 @@ def _order_from_assignment(obj):
     """Return the Order associated with the assignment regardless of type."""
     if obj.assignment_type == 'exchange' and obj.exchange_request:
         return obj.exchange_request.order_item.order
+    if obj.assignment_type == 'return' and obj.return_request:
+        return obj.return_request.order_item.order
     return obj.order
 
 
@@ -106,13 +108,14 @@ class DeliveryAssignmentSerializer(serializers.ModelSerializer):
     delivery_address  = serializers.SerializerMethodField()
     assignment_type   = serializers.CharField(read_only=True)
     exchange_item     = serializers.SerializerMethodField()
+    return_item       = serializers.SerializerMethodField()
     logs              = DeliveryStatusLogSerializer(many=True, read_only=True)
 
     class Meta:
         model  = DeliveryAssignment
         fields = [
             'id', 'assignment_type', 'order', 'order_number',
-            'exchange_item', 'customer_name', 'delivery_address',
+            'exchange_item', 'return_item', 'customer_name', 'delivery_address',
             'partner', 'partner_name', 'partner_mobile', 'partner_vehicle',
             'otp', 'status', 'assigned_at', 'picked_up_at', 'delivered_at',
             'proof_image', 'failure_reason', 'notes', 'logs',
@@ -152,6 +155,17 @@ class DeliveryAssignmentSerializer(serializers.ModelSerializer):
             }
         return None
 
+    def get_return_item(self, obj):
+        if obj.assignment_type == 'return' and obj.return_request:
+            item = obj.return_request.order_item
+            return {
+                'product_name': item.product_name,
+                'variant_name': item.variant_name,
+                'quantity':     obj.return_request.return_qty,
+                'refund_amount': str(obj.return_request.refund_amount) if obj.return_request.refund_amount else None,
+            }
+        return None
+
 
 class PartnerAssignmentSerializer(serializers.ModelSerializer):
     """Partner's own view of their assignments."""
@@ -161,12 +175,13 @@ class PartnerAssignmentSerializer(serializers.ModelSerializer):
     customer_phone   = serializers.SerializerMethodField()
     delivery_address = serializers.SerializerMethodField()
     exchange_item    = serializers.SerializerMethodField()
+    return_item      = serializers.SerializerMethodField()
     logs             = DeliveryStatusLogSerializer(many=True, read_only=True)
 
     class Meta:
         model  = DeliveryAssignment
         fields = [
-            'id', 'assignment_type', 'order_number', 'exchange_item',
+            'id', 'assignment_type', 'order_number', 'exchange_item', 'return_item',
             'customer_name', 'customer_phone', 'delivery_address',
             'status', 'assigned_at', 'picked_up_at', 'delivered_at',
             'proof_image', 'failure_reason', 'notes', 'logs',
@@ -198,6 +213,17 @@ class PartnerAssignmentSerializer(serializers.ModelSerializer):
                 'product_name': item.product_name,
                 'variant_name': item.variant_name,
                 'quantity':     obj.exchange_request.return_qty,
+            }
+        return None
+
+    def get_return_item(self, obj):
+        if obj.assignment_type == 'return' and obj.return_request:
+            item = obj.return_request.order_item
+            return {
+                'product_name': item.product_name,
+                'variant_name': item.variant_name,
+                'quantity':     obj.return_request.return_qty,
+                'refund_amount': str(obj.return_request.refund_amount) if obj.return_request.refund_amount else None,
             }
         return None
 

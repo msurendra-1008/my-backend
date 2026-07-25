@@ -81,12 +81,49 @@ def create_log(return_request, action, actor=None, notes=""):
 
 @transaction.atomic
 def process_approved_return(return_request, admin_user=None, admin_notes=""):
-    from apps.wallet.models import Wallet, WalletTransaction
+    """
+    Called when admin approves a return request.
+    Creates a return pickup assignment and moves status to pickup_dispatched.
+    Refund, restock, and commission cancel happen in complete_return_pickup()
+    after admin confirms the item has been physically received from the partner.
+    """
+    from apps.delivery.utils import create_return_pickup_assignment, auto_assign_return_if_enabled
 
     refund_amount = calculate_refund_amount(return_request)
+    return_request.refund_amount = refund_amount
+    return_request.status        = "pickup_dispatched"
+    return_request.waiting_for   = ""
+    return_request.save(update_fields=["refund_amount", "status", "waiting_for"])
 
-    # Credit wallet
-    wallet, _ = Wallet.objects.get_or_create(user=return_request.raised_by)
+    create_return_pickup_assignment(return_request)
+    auto_assign_return_if_enabled(return_request, assigned_by=admin_user)
+
+
+# ── Complete return pickup (called by admin after item received) ───────────────
+
+@transaction.atomic
+def complete_return_pickup(assignment, confirmed_by=None):
+    """
+    Called when admin confirms the returned item has been physically received.
+
+    Side effects (in order):
+    1. Credit customer wallet with refund amount
+    2. Restock the returned variant
+    3. Cancel commission breakup
+    4. Update OrderItem: status → 'refunded'
+    5. Close ReturnRequest: status → 'completed'
+    """
+    from apps.wallet.models import Wallet, WalletTransaction
+
+    rr         = assignment.return_request
+    order_item = rr.order_item
+    qty        = rr.return_qty
+    now        = timezone.now()
+
+    refund_amount = rr.refund_amount or calculate_refund_amount(rr)
+
+    # 1. Credit wallet
+    wallet, _ = Wallet.objects.get_or_create(user=rr.raised_by)
     wallet.balance += refund_amount
     wallet.save(update_fields=["balance"])
 
@@ -94,43 +131,35 @@ def process_approved_return(return_request, admin_user=None, admin_notes=""):
         wallet=wallet,
         type="credit",
         amount=refund_amount,
-        reason=(
-            f"Refund — {return_request.order_item.product_name}"
-            f" × {return_request.return_qty}"
-        ),
-        reference=str(return_request.id),
-        triggered_by=return_request.reviewed_by,
+        reason=f"Refund — {order_item.product_name} × {qty}",
+        reference=str(rr.id),
+        triggered_by=confirmed_by,
     )
 
     try:
         from apps.company_wallet.utils import record_refund_paid
-        record_refund_paid(return_request.order_item, refund_amount)
+        record_refund_paid(order_item, refund_amount)
     except Exception as _cw_err:
         import logging
         logging.getLogger(__name__).error('CompanyWallet record_refund_paid failed: %s', _cw_err)
 
-    # Restock inventory — return to original rack if known, else direct update
-    if return_request.order_item.variant_id:
+    # 2. Restock inventory
+    variant_id = order_item.variant_id
+    if variant_id:
         from apps.products.models import ProductVariant
-        variant_id = return_request.order_item.variant_id
-        qty = return_request.return_qty
         restocked = False
         try:
             from apps.warehouse.models import StockMovement
             from apps.warehouse.utils import assign_stock_to_rack
             last_inbound = (
                 StockMovement.objects.filter(variant_id=variant_id, movement_type='inbound')
-                .order_by('-created_at')
-                .first()
+                .order_by('-created_at').first()
             )
             if last_inbound:
                 variant_obj = ProductVariant.objects.get(pk=variant_id)
                 assign_stock_to_rack(
-                    rack=last_inbound.rack,
-                    variant=variant_obj,
-                    quantity=qty,
-                    reference=str(return_request.id),
-                    notes='Return restock',
+                    rack=last_inbound.rack, variant=variant_obj, quantity=qty,
+                    reference=str(rr.id), notes='Return restock — item confirmed received',
                 )
                 restocked = True
         except Exception:
@@ -140,35 +169,31 @@ def process_approved_return(return_request, admin_user=None, admin_notes=""):
                 stock_quantity=models.F("stock_quantity") + qty
             )
 
-    # Finalise request
-    return_request.refund_amount = refund_amount
-    return_request.status        = "completed"
-    return_request.waiting_for   = ""
-    return_request.completed_at  = timezone.now()
-    return_request.save(update_fields=["refund_amount", "status", "waiting_for", "completed_at"])
-
-    # Update OrderItem
-    return_request.order_item.status = "refunded"
-    return_request.order_item.save(update_fields=["status"])
-
-    # Cancel commission breakup — item returned, no commission should be paid
+    # 3. Cancel commissions
     try:
         from apps.commissions.models import CommissionBreakup
-        breakup = return_request.order_item.commission_breakup
+        breakup = order_item.commission_breakup
         if breakup.status in ('pending_window', 'exchange_hold'):
             breakup.entries.filter(
                 status__in=('pending_window', 'pending')
             ).update(status='cancelled')
             breakup.status = 'cancelled'
             breakup.save(update_fields=['status'])
-    except CommissionBreakup.DoesNotExist:
-        pass
     except Exception:
         pass
 
-    # Log
-    create_log(return_request, "completed", actor=admin_user,
-               notes=admin_notes or f"Approved — refund ₹{refund_amount}")
+    # 4. Update OrderItem
+    order_item.status = "refunded"
+    order_item.save(update_fields=["status"])
+
+    # 5. Close ReturnRequest
+    rr.status       = "completed"
+    rr.waiting_for  = ""
+    rr.completed_at = now
+    rr.save(update_fields=["status", "waiting_for", "completed_at"])
+
+    create_log(rr, "completed", actor=confirmed_by,
+               notes=f"Item received — refund ₹{refund_amount} credited, stock restocked")
 
 
 # ── Process approved exchange ─────────────────────────────────────────────────
