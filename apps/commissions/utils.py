@@ -4,8 +4,18 @@ from django.db import transaction
 from django.utils import timezone
 
 
-def get_effective_rule(product):
-    """Returns ProductCommissionRule if active, else None."""
+def get_effective_rule(product, variant=None):
+    """
+    Returns the commission rule to use.
+    Priority: VariantCommissionRule (if active) → ProductCommissionRule (if active) → None.
+    """
+    if variant is not None:
+        try:
+            rule = variant.commission_rule
+            if rule.is_active:
+                return rule
+        except Exception:
+            pass
     try:
         rule = product.commission_rule
         return rule if rule.is_active else None
@@ -161,7 +171,10 @@ def create_commission_breakup(order_item):
         return None
 
     product = order_item.variant.product
-    rule = get_effective_rule(product)
+    variant = order_item.variant
+
+    # Variant rule takes priority over product rule
+    rule = get_effective_rule(product, variant=variant)
     if not rule:
         return None
 
@@ -203,6 +216,8 @@ def create_commission_breakup(order_item):
         return_window_expires = _return_window,
         rule_snapshot         = {
             'rule_id':                  str(rule.id),
+            'rule_source':              rule.rule_source,
+            'variant_id':               str(variant.id),
             'network_pct':              float(rule.network_commission_pct),
             'team_pct':                 float(rule.team_commission_pct),
             'social_pct':               float(rule.social_work_pct),

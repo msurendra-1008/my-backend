@@ -5,10 +5,14 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.authentication.permissions import IsAdmin, IsAdminOrEmployee
-from .models import CommissionSettings, ProductCommissionRule, CommissionBreakup, CommissionEntry
+from .models import (
+    CommissionSettings, ProductCommissionRule, VariantCommissionRule,
+    CommissionBreakup, CommissionEntry,
+)
 from .serializers import (
     CommissionSettingsSerializer,
     ProductCommissionRuleSerializer,
+    VariantCommissionRuleSerializer,
     CommissionBreakupSerializer,
     CommissionEntrySerializer,
     PendingCommissionSerializer,
@@ -61,6 +65,93 @@ class ProductCommissionRuleViewSet(viewsets.ModelViewSet):
         except ProductCommissionRule.DoesNotExist:
             return Response({'detail': 'No commission rule found for this product.'}, status=status.HTTP_404_NOT_FOUND)
         return Response(ProductCommissionRuleSerializer(rule).data)
+
+    @action(detail=True, methods=['get'], url_path='variants-status')
+    def variants_status(self, request, pk=None):
+        """
+        Returns all variants of the product with their commission rule status:
+        whether they use the product rule (inherited) or have a variant-level override.
+        """
+        from apps.products.utils import get_upa_price
+
+        product_rule = self.get_object()
+        product = product_rule.product
+        variants = product.variants.all().order_by('name')
+
+        result = []
+        for variant in variants:
+            try:
+                price_data = get_upa_price(variant)
+                upa_price  = float(price_data['upa_price'])
+            except Exception:
+                upa_price = float(variant.mrp)
+
+            purchase = float(variant.purchase_price or product.purchase_price or 0)
+            if product.other_charges_type == 'flat':
+                other = float(product.other_charges or 0)
+            else:
+                other = upa_price * float(product.other_charges or 0) / 100
+
+            variant_profit = round((upa_price + other) - purchase, 2) if purchase else None
+
+            variant_rule_data = None
+            has_override      = False
+            try:
+                vcr = variant.commission_rule
+                has_override      = vcr.is_active
+                variant_rule_data = VariantCommissionRuleSerializer(vcr).data
+            except Exception:
+                pass
+
+            result.append({
+                'variant_id':     str(variant.id),
+                'variant_name':   variant.name,
+                'variant_sku':    variant.sku,
+                'variant_mrp':    str(variant.mrp),
+                'upa_price':      str(round(upa_price, 2)),
+                'variant_profit': variant_profit,
+                'is_active':      variant.is_active,
+                'stock_quantity': variant.stock_quantity,
+                'has_override':   has_override,
+                'rule':           variant_rule_data,
+            })
+
+        return Response(result)
+
+
+# ── Variant Commission Rules ──────────────────────────────────────────────────
+
+class VariantCommissionRuleViewSet(viewsets.ModelViewSet):
+    serializer_class = VariantCommissionRuleSerializer
+    filterset_fields = ['is_active', 'variant__product']
+
+    def get_queryset(self):
+        qs = VariantCommissionRule.objects.select_related(
+            'variant__product',
+        ).all()
+        product_id = self.request.query_params.get('product_id')
+        if product_id:
+            qs = qs.filter(variant__product_id=product_id)
+        return qs
+
+    def get_permissions(self):
+        if self.action in ('list', 'retrieve', 'by_variant'):
+            return [IsAdminOrEmployee()]
+        return [IsAdmin()]
+
+    def perform_create(self, serializer):
+        serializer.save(created_by=self.request.user)
+
+    @action(detail=False, methods=['get'], url_path='by-variant')
+    def by_variant(self, request):
+        variant_id = request.query_params.get('variant_id')
+        if not variant_id:
+            return Response({'detail': 'variant_id is required.'}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            rule = VariantCommissionRule.objects.select_related('variant__product').get(variant_id=variant_id)
+        except VariantCommissionRule.DoesNotExist:
+            return Response({'detail': 'No commission rule found for this variant.'}, status=status.HTTP_404_NOT_FOUND)
+        return Response(VariantCommissionRuleSerializer(rule).data)
 
 
 # ── Commission Breakups ───────────────────────────────────────────────────────
