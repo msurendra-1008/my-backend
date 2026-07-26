@@ -95,6 +95,7 @@ class ProductListSerializer(serializers.ModelSerializer):
     profit_amount      = serializers.SerializerMethodField()
     upa_profit_amount  = serializers.SerializerMethodField()
     has_commission_rule = serializers.SerializerMethodField()
+    min_variant_mrp     = serializers.SerializerMethodField()
 
     class Meta:
         model  = Product
@@ -102,7 +103,7 @@ class ProductListSerializer(serializers.ModelSerializer):
             'id', 'name', 'slug', 'sku', 'mrp', 'primary_image',
             'category_name', 'is_published',
             'stock_label', 'total_stock', 'variant_count',
-            'first_variant_id',
+            'first_variant_id', 'min_variant_mrp',
             'pricing_configured', 'purchase_price', 'profit_amount',
             'upa_profit_amount', 'upa_discount_override',
             'has_commission_rule',
@@ -178,6 +179,13 @@ class ProductListSerializer(serializers.ModelSerializer):
         except Exception:
             return False
 
+    def get_min_variant_mrp(self, obj):
+        mrps = [
+            v.mrp for v in obj.variants.filter(is_active=True)
+            if v.mrp is not None
+        ]
+        return str(min(mrps)) if mrps else None
+
 
 # ── ProductDetail ─────────────────────────────────────────────────────────────
 
@@ -241,6 +249,9 @@ class ProductDetailSerializer(serializers.ModelSerializer):
 # ── ProductWrite ─────────────────────────────────────────────────────────────
 
 class ProductWriteSerializer(serializers.ModelSerializer):
+    sku = serializers.CharField(max_length=100, required=False, allow_null=True, allow_blank=True)
+    mrp = serializers.DecimalField(max_digits=12, decimal_places=2, required=False, allow_null=True)
+
     class Meta:
         model  = Product
         fields = [
