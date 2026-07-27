@@ -129,7 +129,9 @@ def _compute_variant_pricing(variant):
     if purchase == 0:
         return None
     price_data = get_upa_price(variant)
-    selling   = float(price_data['mrp'])      # variant.mrp
+    if price_data is None:
+        return None
+    selling   = float(price_data['mrp'])
     upa_price = float(price_data['upa_price'])
     upa_disc  = float(price_data['discount_percent'])
     if product.other_charges_type == 'flat':

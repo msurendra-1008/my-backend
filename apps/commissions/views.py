@@ -124,6 +124,7 @@ class ProductCommissionRuleViewSet(viewsets.ModelViewSet):
         whether they use the product rule (inherited) or have a variant-level override.
         """
         from apps.products.utils import get_upa_price
+        from .serializers import _compute_variant_pricing
 
         product_rule = self.get_object()
         product = product_rule.product
@@ -131,19 +132,23 @@ class ProductCommissionRuleViewSet(viewsets.ModelViewSet):
 
         result = []
         for variant in variants:
-            try:
-                price_data = get_upa_price(variant)
-                upa_price  = float(price_data['upa_price'])
-            except Exception:
-                upa_price = float(variant.mrp)
+            # Compute full pricing breakdown (uses corrected get_upa_price with product fallback)
+            variant_pricing = _compute_variant_pricing(variant)
 
-            purchase = float(variant.purchase_price or product.purchase_price or 0)
-            if product.other_charges_type == 'flat':
-                other = float(product.other_charges or 0)
+            if variant_pricing is not None:
+                upa_price = variant_pricing['upa_price']
+                other     = variant_pricing['other_charges']
+                purchase  = variant_pricing['purchase_price']
+                variant_profit = round(variant_pricing['upa_profit'], 2)
             else:
-                other = upa_price * float(product.other_charges or 0) / 100
-
-            variant_profit = round((upa_price + other) - purchase, 2) if purchase else None
+                # Pricing not set yet — best-effort values for display
+                try:
+                    price_data = get_upa_price(variant)
+                    upa_price  = float(price_data['upa_price']) if price_data else float(variant.mrp or 0)
+                except Exception:
+                    upa_price = float(variant.mrp or 0)
+                purchase       = float(variant.purchase_price or product.purchase_price or 0)
+                variant_profit = None
 
             variant_rule_data = None
             has_override      = False
@@ -155,16 +160,17 @@ class ProductCommissionRuleViewSet(viewsets.ModelViewSet):
                 pass
 
             result.append({
-                'variant_id':     str(variant.id),
-                'variant_name':   variant.name,
-                'variant_sku':    variant.sku,
-                'variant_mrp':    str(variant.mrp),
-                'upa_price':      str(round(upa_price, 2)),
-                'variant_profit': variant_profit,
-                'is_active':      variant.is_active,
-                'stock_quantity': variant.stock_quantity,
-                'has_override':   has_override,
-                'rule':           variant_rule_data,
+                'variant_id':      str(variant.id),
+                'variant_name':    variant.name,
+                'variant_sku':     variant.sku,
+                'variant_mrp':     str(variant.mrp),
+                'upa_price':       str(round(float(upa_price), 2)),
+                'variant_profit':  variant_profit,
+                'variant_pricing': variant_pricing,   # full breakdown for modal
+                'is_active':       variant.is_active,
+                'stock_quantity':  variant.stock_quantity,
+                'has_override':    has_override,
+                'rule':            variant_rule_data,
             })
 
         return Response(result)
