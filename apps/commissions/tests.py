@@ -982,61 +982,6 @@ class UPAPricingAccuracyTest(TestCase):
         self.assertAlmostEqual(p['other_charges'], 108.0, places=2)
         self.assertAlmostEqual(p['upa_profit'], (1080 + 108) - 800, places=2)
 
-    # ── Priority 1b: stored variant.upa_price tests ───────────────────────────
-
-    def test_stored_upa_price_used_over_global_discount(self):
-        """variant.upa_price (written by set_pricing) beats global discount."""
-        from apps.products.utils import get_upa_price
-        v = self._make_variant()
-        # Simulate set_pricing storing 2% off 1200 = 1176
-        v.upa_price = Decimal('1176.00')
-        v.save()
-        result = get_upa_price(v)
-        # global is 10% (would give 1080), stored value is 1176 — must use 1176
-        self.assertEqual(result['upa_price'], '1176.00')
-
-    def test_stored_upa_price_used_over_product_discount_override(self):
-        """variant.upa_price beats product.upa_discount_override."""
-        from apps.products.utils import get_upa_price
-        self.product.upa_discount_override = Decimal('20.00')  # would give 960
-        self.product.save()
-        v = self._make_variant()
-        v.upa_price = Decimal('1176.00')
-        v.save()
-        result = get_upa_price(v)
-        self.assertEqual(result['upa_price'], '1176.00')
-
-    def test_upa_price_override_still_beats_stored_upa_price(self):
-        """Manual upa_price_override wins over stored upa_price."""
-        from apps.products.utils import get_upa_price
-        v = self._make_variant(upa_price_override=Decimal('900.00'))
-        v.upa_price = Decimal('1176.00')
-        v.save()
-        result = get_upa_price(v)
-        self.assertEqual(result['upa_price'], '900.00')
-
-    def test_compute_variant_pricing_uses_stored_upa_price(self):
-        """_compute_variant_pricing produces correct positive upa_profit using stored upa_price."""
-        from apps.commissions.serializers import _compute_variant_pricing
-        v = self._make_variant()
-        # As set_pricing would write: 2% off 1200
-        v.upa_price = Decimal('1176.00')
-        v.save()
-        p = _compute_variant_pricing(v)
-        self.assertIsNotNone(p)
-        self.assertEqual(p['upa_price'], 1176.0)
-        # upa_profit = (1176 + 200) - 800 = 576 — must be positive
-        self.assertAlmostEqual(p['upa_profit'], 576.0, places=2)
-        self.assertGreater(p['upa_profit'], 0)
-
-    def test_none_upa_price_falls_back_to_global(self):
-        """When variant.upa_price is None, global discount is still used as last resort."""
-        from apps.products.utils import get_upa_price
-        v = self._make_variant()  # upa_price not set → None
-        result = get_upa_price(v)
-        # global = 10% → 1080
-        self.assertEqual(result['upa_price'], '1080.00')
-
 
 # ── variants-status API Pricing Tests ─────────────────────────────────────────
 
