@@ -850,3 +850,212 @@ class VariantRuleAPITest(TestCase):
         url = '/api/v1/commissions/variant-rules/'
         resp = self.client.post(url, {}, format='json')
         self.assertEqual(resp.status_code, 401)
+
+
+# ── UPA Pricing Accuracy Tests ────────────────────────────────────────────────
+
+class UPAPricingAccuracyTest(TestCase):
+    """
+    Verifies get_upa_price and _compute_variant_pricing produce correct numbers
+    under the full hierarchy: variant override → product override → product discount → global.
+    """
+
+    def setUp(self):
+        from apps.products.models import UPADiscountSettings
+        self.settings = UPADiscountSettings.get()
+        self.settings.global_discount_percent = Decimal('10.00')
+        self.settings.save()
+
+        self.product = make_product(
+            name='Accuracy Widget',
+            sku='ACC-001',
+            mrp=Decimal('1200.00'),
+            purchase_price=Decimal('800.00'),
+        )
+        self.product.other_charges = Decimal('200.00')
+        self.product.other_charges_type = 'flat'
+        self.product.gst_percentage = Decimal('5.00')
+        self.product.pricing_configured = True
+        self.product.save()
+
+    def _make_variant(self, mrp=None, purchase_price=Decimal('800.00'),
+                      upa_price_override=None):
+        from apps.products.models import ProductVariant
+        v = ProductVariant.objects.create(
+            product=self.product,
+            name='Variant',
+            sku='ACC-001-VAR',
+            mrp=mrp or self.product.mrp,
+            purchase_price=purchase_price,
+            upa_price_override=upa_price_override,
+            stock_quantity=10,
+        )
+        return v
+
+    # ── get_upa_price tests ────────────────────────────────────────────────────
+
+    def test_global_discount_applied_when_no_overrides(self):
+        """With global=10%, variant MRP 1200 → UPA price = 1080."""
+        from apps.products.utils import get_upa_price
+        v = self._make_variant()
+        result = get_upa_price(v)
+        self.assertIsNotNone(result)
+        self.assertEqual(result['upa_price'], '1080.00')
+        self.assertEqual(result['discount_percent'], '10.00')
+        self.assertEqual(result['saving'], '120.00')
+
+    def test_product_discount_override_applied_to_variant(self):
+        """Product upa_discount_override=20% must take precedence over global 10%."""
+        from apps.products.utils import get_upa_price
+        self.product.upa_discount_override = Decimal('20.00')
+        self.product.save()
+        v = self._make_variant()
+        result = get_upa_price(v)
+        self.assertIsNotNone(result)
+        self.assertEqual(result['upa_price'], '960.00')   # 1200 * 0.80
+        self.assertEqual(result['discount_percent'], '20.00')
+
+    def test_variant_price_override_wins_over_product_discount(self):
+        """Variant upa_price_override must beat the product-level discount."""
+        from apps.products.utils import get_upa_price
+        self.product.upa_discount_override = Decimal('20.00')
+        self.product.save()
+        v = self._make_variant(upa_price_override=Decimal('900.00'))
+        result = get_upa_price(v)
+        self.assertEqual(result['upa_price'], '900.00')
+
+    def test_product_price_override_applied_to_variant(self):
+        """Product upa_price_override propagates to variant (when no variant override)."""
+        from apps.products.utils import get_upa_price
+        self.product.upa_price_override = Decimal('1000.00')
+        self.product.save()
+        v = self._make_variant()
+        result = get_upa_price(v)
+        self.assertEqual(result['upa_price'], '1000.00')
+
+    def test_returns_none_when_mrp_is_none(self):
+        """get_upa_price returns None when obj.mrp is None (Product level)."""
+        from apps.products.utils import get_upa_price
+        no_mrp_product = make_product(name='No MRP Product', sku='NOMRP-001', mrp=None)
+        self.assertIsNone(get_upa_price(no_mrp_product))
+
+    # ── _compute_variant_pricing tests ────────────────────────────────────────
+
+    def test_compute_variant_pricing_correct_values(self):
+        """Full pricing breakdown with product 10% discount must be accurate."""
+        from apps.commissions.serializers import _compute_variant_pricing
+        v = self._make_variant()
+        p = _compute_variant_pricing(v)
+        self.assertIsNotNone(p)
+        # MRP 1200, 10% discount → UPA price 1080
+        self.assertEqual(p['selling_price'], 1200.0)
+        self.assertEqual(p['upa_price'], 1080.0)
+        self.assertEqual(p['upa_discount_pct'], 10.0)
+        self.assertEqual(p['upa_discount_amt'], 120.0)
+        # other_charges = 200 (flat)
+        self.assertEqual(p['other_charges'], 200.0)
+        # regular_profit = (1200 + 200) - 800 = 600
+        self.assertEqual(p['regular_profit'], 600.0)
+        # upa_profit = (1080 + 200) - 800 = 480
+        self.assertEqual(p['upa_profit'], 480.0)
+        # GST = 5% of upa_price = 5% of 1080 = 54
+        self.assertAlmostEqual(p['gst_amount'], 54.0, places=2)
+
+    def test_compute_variant_pricing_returns_none_without_purchase_price(self):
+        """No purchase price on variant or product → returns None (not configured)."""
+        from apps.commissions.serializers import _compute_variant_pricing
+        # Clear product-level purchase price too so the fallback chain also yields 0
+        self.product.purchase_price = None
+        self.product.save()
+        v = self._make_variant(purchase_price=None)
+        self.assertIsNone(_compute_variant_pricing(v))
+
+    def test_compute_percent_other_charges(self):
+        """Percent-based other charges are computed on UPA price, not MRP."""
+        from apps.commissions.serializers import _compute_variant_pricing
+        self.product.other_charges = Decimal('10.00')   # 10%
+        self.product.other_charges_type = 'percent'
+        self.product.save()
+        v = self._make_variant()
+        p = _compute_variant_pricing(v)
+        # UPA price = 1080, other = 10% of 1080 = 108
+        self.assertAlmostEqual(p['other_charges'], 108.0, places=2)
+        self.assertAlmostEqual(p['upa_profit'], (1080 + 108) - 800, places=2)
+
+
+# ── variants-status API Pricing Tests ─────────────────────────────────────────
+
+class VariantsStatusPricingTest(TestCase):
+    """
+    Verifies that variants-status endpoint returns variant_pricing field
+    with correct values, even for variants without an override rule.
+    """
+
+    def setUp(self):
+        from apps.products.models import UPADiscountSettings
+        settings = UPADiscountSettings.get()
+        settings.global_discount_percent = Decimal('10.00')
+        settings.save()
+
+        self.admin = make_user('vstatus@test.com', role='admin')
+        self.product = make_product(name='Status Product', sku='STP-001',
+                                    mrp=Decimal('1000.00'),
+                                    purchase_price=Decimal('600.00'))
+        self.product.other_charges = Decimal('50.00')
+        self.product.other_charges_type = 'flat'
+        self.product.gst_percentage = Decimal('0.00')
+        self.product.pricing_configured = True
+        self.product.upa_discount_override = Decimal('15.00')
+        self.product.save()
+
+        from apps.products.models import ProductVariant
+        self.variant = ProductVariant.objects.create(
+            product=self.product, name='V1', sku='STP-001-V1',
+            mrp=Decimal('1000.00'), purchase_price=Decimal('600.00'),
+            stock_quantity=5,
+        )
+        self.product_rule = make_product_rule(self.product)
+
+        self.client = APIClient()
+        self.client.force_authenticate(user=self.admin)
+
+    def test_variants_status_includes_variant_pricing(self):
+        url = f'/api/v1/commissions/product-rules/{self.product_rule.id}/variants-status/'
+        resp = self.client.get(url)
+        self.assertEqual(resp.status_code, 200)
+        row = resp.data[0]
+        self.assertIn('variant_pricing', row)
+        self.assertIsNotNone(row['variant_pricing'])
+
+    def test_variants_status_pricing_uses_product_discount(self):
+        """UPA price must use product's 15% discount, not global 10%."""
+        url = f'/api/v1/commissions/product-rules/{self.product_rule.id}/variants-status/'
+        resp = self.client.get(url)
+        row = resp.data[0]
+        pricing = row['variant_pricing']
+        # 1000 * (1 - 0.15) = 850
+        self.assertEqual(pricing['upa_price'], 850.0)
+        self.assertEqual(pricing['upa_discount_pct'], 15.0)
+
+    def test_variants_status_upa_profit_is_positive(self):
+        """UPA profit must be positive when UPA price > purchase price."""
+        url = f'/api/v1/commissions/product-rules/{self.product_rule.id}/variants-status/'
+        resp = self.client.get(url)
+        pricing = resp.data[0]['variant_pricing']
+        # upa_profit = (850 + 50) - 600 = 300
+        self.assertEqual(pricing['upa_profit'], 300.0)
+        self.assertGreater(pricing['upa_profit'], 0)
+
+    def test_variants_status_pricing_none_without_purchase_price(self):
+        """Variant with no purchase price → variant_pricing is null."""
+        from apps.products.models import ProductVariant
+        v2 = ProductVariant.objects.create(
+            product=self.product, name='V2', sku='STP-001-V2',
+            mrp=Decimal('1000.00'), purchase_price=None, stock_quantity=0,
+        )
+        self.product.purchase_price = None
+        self.product.save()
+        url = f'/api/v1/commissions/product-rules/{self.product_rule.id}/variants-status/'
+        resp = self.client.get(url)
+        v2_row = next(r for r in resp.data if r['variant_id'] == str(v2.id))
+        self.assertIsNone(v2_row['variant_pricing'])
