@@ -255,9 +255,11 @@ class ProductWriteSerializer(serializers.ModelSerializer):
     class Meta:
         model  = Product
         fields = [
+            'id', 'slug',
             'name', 'description', 'category', 'sku', 'barcode',
             'mrp', 'upa_discount_override', 'upa_price_override', 'is_published',
         ]
+        read_only_fields = ['id', 'slug']
 
     def create(self, validated_data):
         validated_data['created_by'] = self.context['request'].user
