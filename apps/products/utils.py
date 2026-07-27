@@ -22,6 +22,9 @@ def get_upa_price(obj: Product | ProductVariant) -> UPAPrice:
     """
     mrp: Decimal = obj.mrp
 
+    if mrp is None:
+        return None
+
     # 1. Exact price override
     if obj.upa_price_override is not None:
         upa = obj.upa_price_override
