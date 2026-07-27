@@ -48,9 +48,9 @@ class Product(BaseModel):
         Category, on_delete=models.SET_NULL,
         null=True, blank=True, related_name='products',
     )
-    sku                    = models.CharField(max_length=100, unique=True)
+    sku                    = models.CharField(max_length=100, unique=True, null=True, blank=True)
     barcode                = models.CharField(max_length=100, blank=True)
-    mrp                    = models.DecimalField(max_digits=12, decimal_places=2)
+    mrp                    = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
     upa_discount_override  = models.DecimalField(
         max_digits=5, decimal_places=2, null=True, blank=True,
         help_text='If set, overrides global UPA discount % for this product.',

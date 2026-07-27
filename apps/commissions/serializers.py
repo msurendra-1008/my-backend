@@ -1,5 +1,8 @@
 from rest_framework import serializers
-from .models import CommissionSettings, ProductCommissionRule, CommissionBreakup, CommissionEntry
+from .models import (
+    CommissionSettings, ProductCommissionRule, VariantCommissionRule,
+    CommissionBreakup, CommissionEntry,
+)
 
 
 class PendingCommissionSerializer(serializers.ModelSerializer):
@@ -115,8 +118,48 @@ class CommissionSettingsSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'updated_by', 'created_at', 'updated_at']
 
 
+def _compute_variant_pricing(variant):
+    """
+    Shared helper — computes pricing breakdown for a specific ProductVariant.
+    Returns None if purchase price is not configured.
+    """
+    from apps.products.utils import get_upa_price
+    product = variant.product
+    purchase = float(variant.purchase_price or product.purchase_price or 0)
+    if purchase == 0:
+        return None
+    price_data = get_upa_price(variant)
+    if price_data is None:
+        return None
+    selling   = float(price_data['mrp'])
+    upa_price = float(price_data['upa_price'])
+    upa_disc  = float(price_data['discount_percent'])
+    if product.other_charges_type == 'flat':
+        other = float(product.other_charges or 0)
+    else:
+        other = upa_price * float(product.other_charges or 0) / 100
+    gst_pct = float(product.gst_percentage or 0)
+    gst_amt = upa_price * gst_pct / 100
+    regular_profit = (selling + other) - purchase
+    upa_profit     = (upa_price + other) - purchase
+    return {
+        'purchase_price':     round(purchase, 2),
+        'selling_price':      round(selling, 2),
+        'other_charges':      round(other, 2),
+        'gst_percentage':     gst_pct,
+        'gst_amount':         round(gst_amt, 2),
+        'upa_discount_pct':   round(upa_disc, 2),
+        'upa_price':          round(upa_price, 2),
+        'upa_discount_amt':   round(selling - upa_price, 2),
+        'regular_profit':     round(regular_profit, 2),
+        'upa_profit':         round(upa_profit, 2),
+        'pricing_configured': True,
+    }
+
+
 class ProductCommissionRuleSerializer(serializers.ModelSerializer):
     product_name            = serializers.CharField(source='product.name', read_only=True)
+    product_slug            = serializers.CharField(source='product.slug', read_only=True)
     product_mrp             = serializers.DecimalField(
         source='product.mrp', max_digits=12, decimal_places=2, read_only=True)
     social_work_pct         = serializers.DecimalField(max_digits=5, decimal_places=2)
@@ -126,6 +169,7 @@ class ProductCommissionRuleSerializer(serializers.ModelSerializer):
     self_commission_pct     = serializers.DecimalField(max_digits=5, decimal_places=2)
     delivery_packaging_pct  = serializers.DecimalField(max_digits=5, decimal_places=2)
     product_pricing         = serializers.SerializerMethodField()
+    variant_rule_count      = serializers.SerializerMethodField()
 
     class Meta:
         model = ProductCommissionRule
@@ -133,8 +177,10 @@ class ProductCommissionRuleSerializer(serializers.ModelSerializer):
             'id',
             'product',
             'product_name',
+            'product_slug',
             'product_mrp',
             'product_pricing',
+            'variant_rule_count',
             'is_active',
             'network_commission_pct',
             'team_commission_pct',
@@ -155,8 +201,8 @@ class ProductCommissionRuleSerializer(serializers.ModelSerializer):
             'updated_at',
         ]
         read_only_fields = [
-            'id', 'product_name', 'product_mrp', 'product_pricing',
-            'created_by', 'created_at', 'updated_at',
+            'id', 'product_name', 'product_slug', 'product_mrp', 'product_pricing',
+            'variant_rule_count', 'created_by', 'created_at', 'updated_at',
         ]
 
     def get_product_pricing(self, obj):
@@ -164,8 +210,11 @@ class ProductCommissionRuleSerializer(serializers.ModelSerializer):
         product = obj.product
         if not product.pricing_configured:
             return None
+        # Use first variant with purchase price, or product-level
         variant = product.variants.filter(purchase_price__isnull=False).first()
-        purchase = float(variant.purchase_price) if variant else float(product.purchase_price or 0)
+        if variant:
+            return _compute_variant_pricing(variant)
+        purchase = float(product.purchase_price or 0)
         if purchase == 0:
             return None
         price_data = get_upa_price(product)
@@ -181,8 +230,8 @@ class ProductCommissionRuleSerializer(serializers.ModelSerializer):
         regular_profit = (selling + other) - purchase
         upa_profit     = (upa_price + other) - purchase
         return {
-            'purchase_price':     purchase,
-            'selling_price':      selling,
+            'purchase_price':     round(purchase, 2),
+            'selling_price':      round(selling, 2),
             'other_charges':      round(other, 2),
             'gst_percentage':     gst_pct,
             'gst_amount':         round(gst_amt, 2),
@@ -193,6 +242,68 @@ class ProductCommissionRuleSerializer(serializers.ModelSerializer):
             'upa_profit':         round(upa_profit, 2),
             'pricing_configured': True,
         }
+
+    def get_variant_rule_count(self, obj):
+        return VariantCommissionRule.objects.filter(
+            variant__product=obj.product, is_active=True,
+        ).count()
+
+
+# ── Variant Commission Rule ───────────────────────────────────────────────────
+
+class VariantCommissionRuleSerializer(serializers.ModelSerializer):
+    variant_name            = serializers.CharField(source='variant.name',        read_only=True)
+    variant_sku             = serializers.CharField(source='variant.sku',         read_only=True)
+    variant_mrp             = serializers.DecimalField(
+        source='variant.mrp', max_digits=12, decimal_places=2, read_only=True)
+    product_id              = serializers.UUIDField(source='variant.product.id',  read_only=True)
+    product_name            = serializers.CharField(source='variant.product.name', read_only=True)
+    social_work_pct         = serializers.DecimalField(max_digits=5, decimal_places=2)
+    company_pct             = serializers.DecimalField(max_digits=5, decimal_places=2)
+    direction               = serializers.ChoiceField(choices=['direct_first', 'ancestor_first'])
+    self_commission_enabled = serializers.BooleanField()
+    self_commission_pct     = serializers.DecimalField(max_digits=5, decimal_places=2)
+    delivery_packaging_pct  = serializers.DecimalField(max_digits=5, decimal_places=2)
+    variant_pricing         = serializers.SerializerMethodField()
+
+    class Meta:
+        model = VariantCommissionRule
+        fields = [
+            'id',
+            'variant',
+            'variant_name',
+            'variant_sku',
+            'variant_mrp',
+            'product_id',
+            'product_name',
+            'variant_pricing',
+            'is_active',
+            'network_commission_pct',
+            'team_commission_pct',
+            'social_work_pct',
+            'company_pct',
+            'self_commission_enabled',
+            'self_commission_pct',
+            'delivery_packaging_pct',
+            'max_upline_levels',
+            'use_max_levels',
+            'direction',
+            'level_percentages',
+            'left_leg_pct',
+            'middle_leg_pct',
+            'right_leg_pct',
+            'created_by',
+            'created_at',
+            'updated_at',
+        ]
+        read_only_fields = [
+            'id', 'variant_name', 'variant_sku', 'variant_mrp',
+            'product_id', 'product_name', 'variant_pricing',
+            'created_by', 'created_at', 'updated_at',
+        ]
+
+    def get_variant_pricing(self, obj):
+        return _compute_variant_pricing(obj.variant)
 
 
 class CommissionEntrySerializer(serializers.ModelSerializer):

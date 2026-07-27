@@ -5,6 +5,23 @@ from core.models import BaseModel
 
 DEFAULT_LEVEL_PERCENTAGES = [40, 25, 15, 10, 5, 3, 2]
 
+# Shared commission field mixin so both ProductCommissionRule and
+# VariantCommissionRule carry the exact same set of fields.
+_COMMISSION_FIELDS_KWARGS = dict(
+    network_commission_pct = dict(field=models.DecimalField, max_digits=5, decimal_places=2),
+    team_commission_pct    = dict(field=models.DecimalField, max_digits=5, decimal_places=2),
+    social_work_pct        = dict(field=models.DecimalField, max_digits=5, decimal_places=2, default=0),
+    company_pct            = dict(field=models.DecimalField, max_digits=5, decimal_places=2, default=0),
+    max_upline_levels      = dict(field=models.PositiveIntegerField, default=7),
+    use_max_levels         = dict(field=models.BooleanField, default=False),
+    left_leg_pct           = dict(field=models.DecimalField, max_digits=5, decimal_places=2, default=Decimal('40.00')),
+    middle_leg_pct         = dict(field=models.DecimalField, max_digits=5, decimal_places=2, default=Decimal('30.00')),
+    right_leg_pct          = dict(field=models.DecimalField, max_digits=5, decimal_places=2, default=Decimal('30.00')),
+    self_commission_enabled = dict(field=models.BooleanField, default=False),
+    self_commission_pct     = dict(field=models.DecimalField, max_digits=5, decimal_places=2, default=0),
+    delivery_packaging_pct  = dict(field=models.DecimalField, max_digits=5, decimal_places=2, default=0),
+)
+
 
 class CommissionSettings(BaseModel):
     DIRECTION_CHOICES = [
@@ -80,8 +97,54 @@ class ProductCommissionRule(BaseModel):
         null=True, blank=True, related_name='created_commission_rules',
     )
 
+    @property
+    def rule_source(self):
+        return 'product'
+
     def __str__(self):
         return f"CommissionRule({self.product.name})"
+
+
+# ── Variant-level Commission Rule ─────────────────────────────────────────────
+
+class VariantCommissionRule(BaseModel):
+    """
+    Optional per-variant override. When present and active for a variant,
+    create_commission_breakup uses this rule instead of the product-level rule.
+    Falls back to ProductCommissionRule if not set or inactive.
+    """
+    DIRECTION_CHOICES = CommissionSettings.DIRECTION_CHOICES
+
+    variant                = models.OneToOneField(
+        'app_products.ProductVariant', on_delete=models.CASCADE,
+        related_name='commission_rule',
+    )
+    is_active              = models.BooleanField(default=True)
+    network_commission_pct = models.DecimalField(max_digits=5, decimal_places=2)
+    team_commission_pct    = models.DecimalField(max_digits=5, decimal_places=2)
+    social_work_pct        = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+    company_pct            = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+    max_upline_levels      = models.PositiveIntegerField(default=7)
+    use_max_levels         = models.BooleanField(default=False)
+    direction              = models.CharField(max_length=20, choices=DIRECTION_CHOICES, default='direct_first')
+    level_percentages      = models.JSONField(default=list)
+    left_leg_pct           = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('40.00'))
+    middle_leg_pct         = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('30.00'))
+    right_leg_pct          = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('30.00'))
+    self_commission_enabled = models.BooleanField(default=False)
+    self_commission_pct     = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+    delivery_packaging_pct  = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+    created_by             = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='created_variant_commission_rules',
+    )
+
+    @property
+    def rule_source(self):
+        return 'variant'
+
+    def __str__(self):
+        return f"VariantCommissionRule({self.variant.product.name} — {self.variant.name})"
 
 
 class CommissionBreakup(BaseModel):

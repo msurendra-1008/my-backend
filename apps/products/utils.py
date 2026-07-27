@@ -22,6 +22,10 @@ def get_upa_price(obj: Product | ProductVariant) -> UPAPrice:
     """
     mrp: Decimal = obj.mrp
 
+    # No MRP means UPA pricing cannot be computed
+    if mrp is None:
+        return None
+
     # 1. Exact price override
     if obj.upa_price_override is not None:
         upa = obj.upa_price_override
@@ -34,8 +38,26 @@ def get_upa_price(obj: Product | ProductVariant) -> UPAPrice:
             'saving':           str(saving),
         }
 
-    # 2. Per-product discount % override (only on Product, not Variant)
+    # 2. Per-object discount % override (Product has upa_discount_override directly;
+    #    ProductVariant does not, so we fall through to the parent product next)
     discount_pct: Decimal | None = getattr(obj, 'upa_discount_override', None)
+
+    # 2b. For variants, inherit the parent product's discount override before global
+    if discount_pct is None:
+        parent = getattr(obj, 'product', None)
+        if parent is not None:
+            # If the product has an exact price override, apply it to this variant's MRP
+            if parent.upa_price_override is not None:
+                upa    = parent.upa_price_override
+                saving = (mrp - upa).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+                pct    = (saving / mrp * 100).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP) if mrp else Decimal('0')
+                return {
+                    'mrp':              str(mrp),
+                    'upa_price':        str(upa),
+                    'discount_percent': str(pct),
+                    'saving':           str(saving),
+                }
+            discount_pct = getattr(parent, 'upa_discount_override', None)
 
     # 3. Global fallback
     if discount_pct is None:
