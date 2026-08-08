@@ -386,7 +386,9 @@ class ProductWriteSerializer(serializers.ModelSerializer):
             for combo in variant_combinations:
                 attrs     = combo.get('attributes', {})
                 stock_qty = combo.get('stock_quantity', 0)
-                name      = ', '.join(f'{k}: {v}' for k, v in attrs.items()) or 'Default'
+                name      = (combo.get('name') or
+                             ', '.join(f'{k}: {v}' for k, v in attrs.items()) or
+                             'Default')
 
                 variant             = ProductVariant(
                     product=product,
@@ -415,7 +417,9 @@ class ProductWriteSerializer(serializers.ModelSerializer):
                 for combo in variant_combinations:
                     attrs     = combo.get('attributes', {})
                     stock_qty = combo.get('stock_quantity', 0)
-                    name      = ', '.join(f'{k}: {v}' for k, v in attrs.items()) or 'Default'
+                    name      = (combo.get('name') or
+                                 ', '.join(f'{k}: {v}' for k, v in attrs.items()) or
+                                 'Default')
                     variant   = ProductVariant(
                         product=instance,
                         name=name,
