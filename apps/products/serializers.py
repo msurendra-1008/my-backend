@@ -1,22 +1,83 @@
 from rest_framework import serializers
 
-from .models import Category, Product, ProductImage, ProductVariant, UPADiscountSettings
+from .models import (
+    Brand, Category, Product, ProductImage, ProductVariant, UPADiscountSettings,
+    generate_product_sku, generate_variant_sku, build_variant_combinations,
+)
 from .utils import get_upa_price
 
 
 # ── Category ─────────────────────────────────────────────────────────────────
 
 class CategorySerializer(serializers.ModelSerializer):
-    parent_id   = serializers.UUIDField(source='parent.id',   read_only=True, allow_null=True)
-    parent_name = serializers.CharField(source='parent.name', read_only=True, allow_null=True)
-    parent      = serializers.PrimaryKeyRelatedField(
+    parent_id      = serializers.UUIDField(source='parent.id',   read_only=True, allow_null=True)
+    parent_name    = serializers.CharField(source='parent.name', read_only=True, allow_null=True)
+    parent         = serializers.PrimaryKeyRelatedField(
         queryset=Category.objects.all(), allow_null=True, required=False, write_only=True,
     )
+    level_name     = serializers.CharField(read_only=True)
+    children_count = serializers.SerializerMethodField()
 
     class Meta:
         model  = Category
-        fields = ['id', 'name', 'slug', 'parent', 'parent_id', 'parent_name', 'is_active']
+        fields = [
+            'id', 'name', 'slug', 'short_code', 'depth', 'level_name',
+            'parent', 'parent_id', 'parent_name',
+            'field_schema', 'is_active', 'children_count',
+        ]
         read_only_fields = ['slug']
+
+    def get_children_count(self, obj):
+        return obj.children.count()
+
+    def validate(self, data):
+        parent = data.get('parent')
+        depth  = data.get('depth', getattr(self.instance, 'depth', 0))
+
+        if depth == 0 and parent is not None:
+            raise serializers.ValidationError('Category Group (depth=0) must have no parent.')
+
+        if parent is not None:
+            expected_parent_depth = depth - 1
+            if parent.depth != expected_parent_depth:
+                raise serializers.ValidationError(
+                    f'A depth-{depth} category must have a depth-{expected_parent_depth} parent. '
+                    f'Selected parent "{parent.name}" is at depth-{parent.depth}.'
+                )
+
+        return data
+
+
+class CategoryTreeSerializer(serializers.ModelSerializer):
+    """Lightweight full-tree serializer for navigation dropdowns."""
+    children   = serializers.SerializerMethodField()
+    level_name = serializers.CharField(read_only=True)
+
+    class Meta:
+        model  = Category
+        fields = ['id', 'name', 'slug', 'short_code', 'depth', 'level_name', 'is_active', 'children']
+
+    def get_children(self, obj):
+        qs = obj.children.order_by('name')
+        return CategoryTreeSerializer(qs, many=True).data
+
+
+# ── Brand ─────────────────────────────────────────────────────────────────────
+
+class BrandSerializer(serializers.ModelSerializer):
+    logo_url = serializers.SerializerMethodField()
+
+    class Meta:
+        model  = Brand
+        fields = ['id', 'name', 'slug', 'logo', 'logo_url', 'is_active']
+        read_only_fields = ['slug']
+        extra_kwargs = {'logo': {'write_only': True, 'required': False}}
+
+    def get_logo_url(self, obj):
+        request = self.context.get('request')
+        if obj.logo and request:
+            return request.build_absolute_uri(obj.logo.url)
+        return obj.logo.url if obj.logo else None
 
 
 # ── ProductImage ─────────────────────────────────────────────────────────────
@@ -51,7 +112,7 @@ class ProductVariantSerializer(serializers.ModelSerializer):
     class Meta:
         model  = ProductVariant
         fields = [
-            'id', 'name', 'variant_type', 'sku', 'mrp',
+            'id', 'name', 'variant_type', 'attributes', 'sku', 'mrp',
             'upa_price_override', 'stock_quantity', 'stock_label',
             'is_active', 'upa_price_computed',
             'purchase_price', 'upa_price', 'variant_profit',
@@ -80,10 +141,23 @@ class ProductVariantSerializer(serializers.ModelSerializer):
         return round((selling + other) - purchase, 2)
 
 
+class ProductVariantWriteSerializer(serializers.ModelSerializer):
+    class Meta:
+        model  = ProductVariant
+        fields = ['name', 'variant_type', 'attributes', 'sku', 'mrp',
+                  'upa_price_override', 'stock_quantity', 'is_active']
+        extra_kwargs = {
+            'sku':  {'required': False},
+            'name': {'required': False},
+            'mrp':  {'required': False},
+        }
+
+
 # ── ProductList ───────────────────────────────────────────────────────────────
 
 class ProductListSerializer(serializers.ModelSerializer):
     category_name    = serializers.CharField(source='category.name', read_only=True)
+    brand_name       = serializers.CharField(source='brand.name', read_only=True, allow_null=True)
     primary_image    = serializers.SerializerMethodField()
     stock_label      = serializers.SerializerMethodField()
     variant_count    = serializers.SerializerMethodField()
@@ -95,15 +169,14 @@ class ProductListSerializer(serializers.ModelSerializer):
     profit_amount      = serializers.SerializerMethodField()
     upa_profit_amount  = serializers.SerializerMethodField()
     has_commission_rule = serializers.SerializerMethodField()
-    min_variant_mrp     = serializers.SerializerMethodField()
 
     class Meta:
         model  = Product
         fields = [
             'id', 'name', 'slug', 'sku', 'mrp', 'primary_image',
-            'category_name', 'is_published',
+            'category_name', 'brand_name', 'is_published',
             'stock_label', 'total_stock', 'variant_count',
-            'first_variant_id', 'min_variant_mrp',
+            'first_variant_id',
             'pricing_configured', 'purchase_price', 'profit_amount',
             'upa_profit_amount', 'upa_discount_override',
             'has_commission_rule',
@@ -118,9 +191,7 @@ class ProductListSerializer(serializers.ModelSerializer):
 
     def _total_stock(self, obj):
         variants = obj.variants.filter(is_active=True)
-        if variants.exists():
-            return sum(v.stock_quantity for v in variants)
-        return 0
+        return sum(v.stock_quantity for v in variants) if variants.exists() else 0
 
     def get_stock_label(self, obj):
         stock = self._total_stock(obj)
@@ -145,9 +216,9 @@ class ProductListSerializer(serializers.ModelSerializer):
 
     def get_profit_amount(self, obj):
         variant = self._first_priced_variant(obj)
-        if not variant:
+        if not variant or not variant.mrp:
             return None
-        selling  = float(variant.mrp or 0)
+        selling  = float(variant.mrp)
         purchase = float(variant.purchase_price or 0)
         if not purchase:
             return None
@@ -159,9 +230,9 @@ class ProductListSerializer(serializers.ModelSerializer):
 
     def get_upa_profit_amount(self, obj):
         variant = self._first_priced_variant(obj)
-        if not variant:
+        if not variant or not variant.mrp:
             return None
-        selling  = float(variant.mrp or 0)
+        selling  = float(variant.mrp)
         purchase = float(variant.purchase_price or 0)
         if not purchase:
             return None
@@ -179,18 +250,12 @@ class ProductListSerializer(serializers.ModelSerializer):
         except Exception:
             return False
 
-    def get_min_variant_mrp(self, obj):
-        mrps = [
-            v.mrp for v in obj.variants.filter(is_active=True)
-            if v.mrp is not None
-        ]
-        return str(min(mrps)) if mrps else None
-
 
 # ── ProductDetail ─────────────────────────────────────────────────────────────
 
 class ProductDetailSerializer(serializers.ModelSerializer):
     category    = CategorySerializer(read_only=True)
+    brand       = BrandSerializer(read_only=True)
     images      = ProductImageSerializer(many=True, read_only=True)
     variants    = ProductVariantSerializer(many=True, read_only=True)
     upa_price   = serializers.SerializerMethodField()
@@ -210,7 +275,8 @@ class ProductDetailSerializer(serializers.ModelSerializer):
     class Meta:
         model  = Product
         fields = [
-            'id', 'name', 'slug', 'description', 'category', 'sku', 'barcode',
+            'id', 'name', 'slug', 'description', 'category', 'brand',
+            'extra_fields', 'sku', 'barcode',
             'mrp', 'upa_discount_override', 'upa_price_override',
             'is_published', 'created_at', 'updated_at',
             'images', 'variants', 'upa_price', 'stock_label', 'total_stock',
@@ -249,29 +315,118 @@ class ProductDetailSerializer(serializers.ModelSerializer):
 # ── ProductWrite ─────────────────────────────────────────────────────────────
 
 class ProductWriteSerializer(serializers.ModelSerializer):
-    sku = serializers.CharField(max_length=100, required=False, allow_null=True, allow_blank=True)
-    mrp = serializers.DecimalField(max_digits=12, decimal_places=2, required=False, allow_null=True)
+    """
+    Handles product creation with auto-variant generation.
+
+    POST body:
+    {
+        "name": "India Gate Basmati Rice",
+        "description": "...",
+        "category": "<uuid>",           # must be depth=3 (Product Category)
+        "brand": "<uuid>",              # optional
+        "extra_fields": {"origin": "Punjab"},
+        "variant_combinations": [
+            {"attributes": {"weight": "500g"}, "stock_quantity": 50},
+            {"attributes": {"weight": "1kg"},  "stock_quantity": 30}
+        ]
+    }
+    """
+    variant_combinations = serializers.ListField(
+        child=serializers.DictField(), write_only=True, required=False, default=list,
+    )
+    brand = serializers.PrimaryKeyRelatedField(
+        queryset=Brand.objects.all(), allow_null=True, required=False,
+    )
 
     class Meta:
         model  = Product
         fields = [
-            'id', 'slug',
-            'name', 'description', 'category', 'sku', 'barcode',
-            'mrp', 'upa_discount_override', 'upa_price_override', 'is_published',
+            'name', 'description', 'category', 'brand', 'extra_fields',
+            'barcode', 'upa_discount_override', 'upa_price_override',
+            'is_published', 'variant_combinations',
         ]
-        read_only_fields = ['id', 'slug']
+
+    def validate_category(self, value):
+        if value is not None and value.depth != 3:
+            raise serializers.ValidationError(
+                f'Product must be assigned to a Product Category (depth=3). '
+                f'"{value.name}" is at depth-{value.depth}.'
+            )
+        return value
+
+    def validate_extra_fields(self, value):
+        return value if value else {}
+
+    def validate(self, data):
+        category = data.get('category') or (self.instance.category if self.instance else None)
+        if category and category.field_schema:
+            required_keys = [
+                f['key'] for f in category.field_schema.get('product_fields', [])
+                if f.get('required')
+            ]
+            extra   = data.get('extra_fields', {})
+            missing = [k for k in required_keys if not extra.get(k)]
+            if missing:
+                raise serializers.ValidationError({
+                    'extra_fields': f'Required fields missing: {", ".join(missing)}'
+                })
+        return data
 
     def create(self, validated_data):
+        from django.db import transaction
+
+        variant_combinations = validated_data.pop('variant_combinations', [])
         validated_data['created_by'] = self.context['request'].user
-        return super().create(validated_data)
 
+        with transaction.atomic():
+            product     = Product(**validated_data)
+            product.sku = generate_product_sku(product)
+            product.save()
 
-# ── ProductVariantWrite ────────────────────────────────────────────────────────
+            for combo in variant_combinations:
+                attrs     = combo.get('attributes', {})
+                stock_qty = combo.get('stock_quantity', 0)
+                name      = ', '.join(f'{k}: {v}' for k, v in attrs.items()) or 'Default'
 
-class ProductVariantWriteSerializer(serializers.ModelSerializer):
-    class Meta:
-        model  = ProductVariant
-        fields = ['name', 'variant_type', 'sku', 'mrp', 'upa_price_override', 'stock_quantity', 'is_active']
+                variant             = ProductVariant(
+                    product=product,
+                    name=name,
+                    attributes=attrs,
+                    stock_quantity=stock_qty,
+                    sku='__placeholder__',
+                )
+                variant.sku = generate_variant_sku(variant, product.sku)
+                variant.save()
+
+        return product
+
+    def update(self, instance, validated_data):
+        from django.db import transaction
+
+        variant_combinations = validated_data.pop('variant_combinations', None)
+
+        with transaction.atomic():
+            for attr, value in validated_data.items():
+                setattr(instance, attr, value)
+            instance.save()
+
+            if variant_combinations is not None:
+                instance.variants.all().delete()
+                for combo in variant_combinations:
+                    attrs     = combo.get('attributes', {})
+                    stock_qty = combo.get('stock_quantity', 0)
+                    name      = ', '.join(f'{k}: {v}' for k, v in attrs.items()) or 'Default'
+                    variant   = ProductVariant(
+                        product=instance,
+                        name=name,
+                        attributes=attrs,
+                        stock_quantity=stock_qty,
+                        sku='__placeholder__',
+                    )
+                    variant.sku = generate_variant_sku(variant, instance.sku)
+                    variant.save()
+
+        return instance
 
 
 # ── UPADiscountSettings ───────────────────────────────────────────────────────
