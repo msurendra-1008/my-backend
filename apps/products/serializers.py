@@ -163,12 +163,19 @@ class ProductListSerializer(serializers.ModelSerializer):
     variant_count    = serializers.SerializerMethodField()
     total_stock      = serializers.SerializerMethodField()
     first_variant_id = serializers.SerializerMethodField()
-    pricing_configured = serializers.BooleanField(read_only=True)
-    purchase_price   = serializers.DecimalField(
-                         max_digits=10, decimal_places=2, read_only=True, allow_null=True)
-    profit_amount      = serializers.SerializerMethodField()
-    upa_profit_amount  = serializers.SerializerMethodField()
-    has_commission_rule = serializers.SerializerMethodField()
+    pricing_configured       = serializers.BooleanField(read_only=True)
+    purchase_price           = serializers.DecimalField(
+                                 max_digits=10, decimal_places=2, read_only=True, allow_null=True)
+    profit_amount            = serializers.SerializerMethodField()
+    upa_profit_amount        = serializers.SerializerMethodField()
+    has_commission_rule      = serializers.SerializerMethodField()
+    configured_variant_count = serializers.SerializerMethodField()
+    mrp_min                  = serializers.SerializerMethodField()
+    mrp_max                  = serializers.SerializerMethodField()
+    profit_min               = serializers.SerializerMethodField()
+    profit_max               = serializers.SerializerMethodField()
+    upa_profit_min           = serializers.SerializerMethodField()
+    upa_profit_max           = serializers.SerializerMethodField()
 
     class Meta:
         model  = Product
@@ -180,6 +187,10 @@ class ProductListSerializer(serializers.ModelSerializer):
             'pricing_configured', 'purchase_price', 'profit_amount',
             'upa_profit_amount', 'upa_discount_override',
             'has_commission_rule',
+            'configured_variant_count',
+            'mrp_min', 'mrp_max',
+            'profit_min', 'profit_max',
+            'upa_profit_min', 'upa_profit_max',
         ]
 
     def get_primary_image(self, obj):
@@ -249,6 +260,80 @@ class ProductListSerializer(serializers.ModelSerializer):
             return obj.commission_rule.is_active
         except Exception:
             return False
+
+    # ── Variant pricing range helpers ─────────────────────────────────────────
+
+    def _variant_metrics(self, obj):
+        """Compute min/max MRP and profit across all fully-priced active variants.
+        Results are cached per object to avoid repeated queries."""
+        if not hasattr(self, '_vmetrics_cache'):
+            self._vmetrics_cache = {}
+        if obj.id in self._vmetrics_cache:
+            return self._vmetrics_cache[obj.id]
+
+        priced = [
+            v for v in obj.variants.filter(is_active=True)
+            if v.purchase_price and v.mrp
+        ]
+
+        empty = {
+            'count': 0,
+            'mrp_min': None, 'mrp_max': None,
+            'profit_min': None, 'profit_max': None,
+            'upa_profit_min': None, 'upa_profit_max': None,
+        }
+        if not priced:
+            self._vmetrics_cache[obj.id] = empty
+            return empty
+
+        upa_discount = float(obj.upa_discount_override or 0)
+        other_raw    = float(obj.other_charges or 0)
+        other_type   = obj.other_charges_type
+
+        mrps, profits, upa_profits = [], [], []
+        for v in priced:
+            selling  = float(v.mrp)
+            purchase = float(v.purchase_price)
+            other    = other_raw if other_type == 'flat' else selling * other_raw / 100
+            profits.append(round((selling + other) - purchase, 2))
+            mrps.append(selling)
+
+            upa_price = selling * (1 - upa_discount / 100)
+            upa_other = other_raw if other_type == 'flat' else upa_price * other_raw / 100
+            upa_profits.append(round((upa_price + upa_other) - purchase, 2))
+
+        result = {
+            'count':          len(priced),
+            'mrp_min':        str(round(min(mrps), 2)),
+            'mrp_max':        str(round(max(mrps), 2)),
+            'profit_min':     min(profits),
+            'profit_max':     max(profits),
+            'upa_profit_min': min(upa_profits),
+            'upa_profit_max': max(upa_profits),
+        }
+        self._vmetrics_cache[obj.id] = result
+        return result
+
+    def get_configured_variant_count(self, obj):
+        return self._variant_metrics(obj)['count']
+
+    def get_mrp_min(self, obj):
+        return self._variant_metrics(obj)['mrp_min']
+
+    def get_mrp_max(self, obj):
+        return self._variant_metrics(obj)['mrp_max']
+
+    def get_profit_min(self, obj):
+        return self._variant_metrics(obj)['profit_min']
+
+    def get_profit_max(self, obj):
+        return self._variant_metrics(obj)['profit_max']
+
+    def get_upa_profit_min(self, obj):
+        return self._variant_metrics(obj)['upa_profit_min']
+
+    def get_upa_profit_max(self, obj):
+        return self._variant_metrics(obj)['upa_profit_max']
 
 
 # ── ProductDetail ─────────────────────────────────────────────────────────────
