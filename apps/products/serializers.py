@@ -358,6 +358,12 @@ class ProductWriteSerializer(serializers.ModelSerializer):
         return value if value else {}
 
     def validate(self, data):
+        # Only enforce required extra_fields on create, or when extra_fields is
+        # explicitly included in a PATCH payload. Omitting extra_fields on PATCH
+        # means "don't touch them", so we must not re-validate stale required keys.
+        if 'extra_fields' not in data and self.instance:
+            return data
+
         category = data.get('category') or (self.instance.category if self.instance else None)
         if category and category.field_schema:
             required_keys = [
