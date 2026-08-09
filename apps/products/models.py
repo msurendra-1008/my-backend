@@ -220,6 +220,7 @@ class ProductVariant(BaseModel):
     )
     stock_quantity     = models.IntegerField(default=0)
     is_active          = models.BooleanField(default=True)
+    order              = models.PositiveIntegerField(default=0, help_text='Display order (drag to reorder)')
     purchase_price     = models.DecimalField(
                            max_digits=10, decimal_places=2,
                            null=True, blank=True,
@@ -230,7 +231,7 @@ class ProductVariant(BaseModel):
                            help_text='Calculated UPA price after discount')
 
     class Meta:
-        ordering = ['name']
+        ordering = ['order', 'name']
 
     def __str__(self):
         return f"{self.product.name} — {self.name}"
