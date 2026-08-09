@@ -266,11 +266,14 @@ def generate_product_sku(product: 'Product') -> str:
 
 
 def generate_variant_sku(variant: 'ProductVariant', product_sku: str) -> str:
-    """Build: {product_sku}-{ATTRVAL}"""
+    """Build: {product_sku}-{ATTRVAL or NAME}"""
     attr_code = ''
     if variant.attributes:
-        first_val = next(iter(variant.attributes.values()), '')
-        attr_code = _clean_code(str(first_val), max_len=6)
+        # join all attribute values: weight=1kg, grade=A → 1KG-A
+        parts = [_clean_code(str(v), max_len=5) for v in variant.attributes.values() if v]
+        attr_code = '-'.join(p for p in parts if p)
+    elif variant.name and variant.name not in ('Default',):
+        attr_code = _clean_code(variant.name, max_len=8)
 
     base = f'{product_sku}-{attr_code}' if attr_code else f'{product_sku}-VAR'
     sku  = base
