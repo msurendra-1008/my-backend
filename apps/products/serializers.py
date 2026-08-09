@@ -114,7 +114,7 @@ class ProductVariantSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'name', 'variant_type', 'attributes', 'sku', 'mrp',
             'upa_price_override', 'stock_quantity', 'stock_label',
-            'is_active', 'upa_price_computed',
+            'is_active', 'order', 'upa_price_computed',
             'purchase_price', 'upa_price', 'variant_profit',
         ]
 
@@ -145,7 +145,7 @@ class ProductVariantWriteSerializer(serializers.ModelSerializer):
     class Meta:
         model  = ProductVariant
         fields = ['name', 'variant_type', 'attributes', 'sku', 'mrp',
-                  'upa_price_override', 'stock_quantity', 'is_active']
+                  'upa_price_override', 'stock_quantity', 'is_active', 'order']
         extra_kwargs = {
             'sku':  {'required': False},
             'name': {'required': False},
