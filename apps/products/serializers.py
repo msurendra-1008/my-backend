@@ -384,15 +384,17 @@ class ProductWriteSerializer(serializers.ModelSerializer):
             product.save()
 
             for combo in variant_combinations:
-                attrs     = combo.get('attributes', {})
-                stock_qty = combo.get('stock_quantity', 0)
-                name      = (combo.get('name') or
-                             ', '.join(f'{k}: {v}' for k, v in attrs.items()) or
-                             'Default')
+                attrs        = combo.get('attributes', {})
+                stock_qty    = combo.get('stock_quantity', 0)
+                variant_type = combo.get('variant_type', 'other')
+                name         = (combo.get('name') or
+                                ', '.join(f'{k}: {v}' for k, v in attrs.items()) or
+                                'Default')
 
                 variant             = ProductVariant(
                     product=product,
                     name=name,
+                    variant_type=variant_type,
                     attributes=attrs,
                     stock_quantity=stock_qty,
                     sku='__placeholder__',
@@ -415,14 +417,16 @@ class ProductWriteSerializer(serializers.ModelSerializer):
             if variant_combinations is not None:
                 instance.variants.all().delete()
                 for combo in variant_combinations:
-                    attrs     = combo.get('attributes', {})
-                    stock_qty = combo.get('stock_quantity', 0)
-                    name      = (combo.get('name') or
-                                 ', '.join(f'{k}: {v}' for k, v in attrs.items()) or
-                                 'Default')
+                    attrs        = combo.get('attributes', {})
+                    stock_qty    = combo.get('stock_quantity', 0)
+                    variant_type = combo.get('variant_type', 'other')
+                    name         = (combo.get('name') or
+                                    ', '.join(f'{k}: {v}' for k, v in attrs.items()) or
+                                    'Default')
                     variant   = ProductVariant(
                         product=instance,
                         name=name,
+                        variant_type=variant_type,
                         attributes=attrs,
                         stock_quantity=stock_qty,
                         sku='__placeholder__',
