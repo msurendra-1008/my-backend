@@ -176,6 +176,8 @@ class ProductListSerializer(serializers.ModelSerializer):
     profit_max               = serializers.SerializerMethodField()
     upa_profit_min           = serializers.SerializerMethodField()
     upa_profit_max           = serializers.SerializerMethodField()
+    min_variant_upa_price    = serializers.SerializerMethodField()
+    max_discount_percent     = serializers.SerializerMethodField()
 
     class Meta:
         model  = Product
@@ -191,6 +193,7 @@ class ProductListSerializer(serializers.ModelSerializer):
             'mrp_min', 'mrp_max',
             'profit_min', 'profit_max',
             'upa_profit_min', 'upa_profit_max',
+            'min_variant_upa_price', 'max_discount_percent',
         ]
 
     def get_primary_image(self, obj):
@@ -334,6 +337,22 @@ class ProductListSerializer(serializers.ModelSerializer):
 
     def get_upa_profit_max(self, obj):
         return self._variant_metrics(obj)['upa_profit_max']
+
+    def get_min_variant_upa_price(self, obj):
+        prices = [
+            float(v.upa_price)
+            for v in obj.variants.all()
+            if v.is_active and v.upa_price is not None
+        ]
+        return str(round(min(prices), 2)) if prices else None
+
+    def get_max_discount_percent(self, obj):
+        pcts = []
+        for v in obj.variants.all():
+            if v.is_active and v.upa_price is not None and v.mrp:
+                pct = (1 - float(v.upa_price) / float(v.mrp)) * 100
+                pcts.append(pct)
+        return str(round(max(pcts), 2)) if pcts else None
 
 
 # ── ProductDetail ─────────────────────────────────────────────────────────────
