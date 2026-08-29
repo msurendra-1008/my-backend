@@ -128,7 +128,7 @@ class ProductCommissionRuleViewSet(viewsets.ModelViewSet):
 
         product_rule = self.get_object()
         product = product_rule.product
-        variants = product.variants.all().order_by('name')
+        variants = product.variants.filter(is_active=True).order_by('order', 'name')
 
         result = []
         for variant in variants:
